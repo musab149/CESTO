@@ -1,0 +1,41 @@
+export const colors = {
+  brand: {
+    deepest: '#022B91',
+    DEFAULT: '#054EE8',
+    mid: '#2A6AEF',
+    light: '#7AA1F6',
+    soft: '#B6CBFA',
+    mist: '#DCE6FD',
+    whisper: '#F0F4FE',
+  },
+  // Variable name stays "amber" to avoid touching every consumer; the
+  // actual values are now the fresh-green accent (#7FC646 scale).
+  amber: {
+    deep: '#5FA133',
+    DEFAULT: '#7FC646',
+    mid: '#98D265',
+    mist: '#E9F4DC',
+  },
+  surface: {
+    linen: '#FAFBF8',
+    cream: '#FFFFFF',
+    white: '#FFFFFF',
+    sand:  '#F2F5F0',
+    mint:  '#E8F5EC',
+    sage:  '#DFEFE3',
+    dune:  '#EFEAE1',
+  },
+  ink: '#0F172A',
+  charcoal: '#1E293B',
+  gray: '#475569',
+  muted: '#94A3B8',
+  border: '#E2E8F0',
+  info: '#2563EB',
+  infoBg: '#DBEAFE',
+  danger: '#DC2626',
+  dangerBg: '#FEE2E2',
+  success: '#16A34A',
+  successBg: '#DCFCE7',
+  warning: '#EA580C',
+  warningBg: '#FFEDD5',
+} as const;

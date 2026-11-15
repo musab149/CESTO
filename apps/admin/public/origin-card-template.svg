@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Origin card template — paste in your landmark/silhouette in place of the
+  example tower. Recommended canvas: 320×240px. Transparent background.
+  Use a single fill colour (currentColor) so the silhouette can be re-tinted
+  in the customer card. The example below uses #F19543 (India accent).
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 320 240"
+  width="320"
+  height="240"
+  fill="#F19543"
+  role="img"
+  aria-label="Origin card template — replace with your landmark silhouette"
+>
+  <!-- Soft ground line -->
+  <rect x="0" y="216" width="320" height="6" />
+  <!-- Hills (decorative) -->
+  <path d="M0,216 Q40,196 80,216 Z" opacity="0.55" />
+  <path d="M240,216 Q280,196 320,216 Z" opacity="0.55" />
+
+  <!-- ╭──────────────────────────────────────────────╮ -->
+  <!-- │ Replace this group with your landmark silhouette │ -->
+  <!-- ╰──────────────────────────────────────────────╯ -->
+  <g transform="translate(110,40)">
+    <!-- Example: Minar-e-Pakistan style tower -->
+    <rect x="40" y="160" width="20" height="16" />
+    <rect x="46" y="152" width="8" height="8" />
+    <rect x="48" y="36" width="4" height="116" />
+    <rect x="42" y="124" width="16" height="3" />
+    <rect x="42" y="92" width="16" height="3" />
+    <rect x="42" y="60" width="16" height="3" />
+    <circle cx="50" cy="32" r="6" />
+    <rect x="49" y="6" width="2" height="22" />
+  </g>
+</svg>

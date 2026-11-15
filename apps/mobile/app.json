@@ -1,0 +1,104 @@
+{
+  "expo": {
+    "name": "Cesto",
+    "slug": "cesto",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "scheme": "cesto",
+    "jsEngine": "hermes",
+    "updates": {
+      "url": "https://u.expo.dev/6eca34e6-60aa-4224-ae8e-976a00539329",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#054EE8"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "es.cesto.app",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Cesto uses your camera so you can take a profile picture.",
+        "NSPhotoLibraryUsageDescription": "Cesto needs access to your photos so you can choose a profile picture.",
+        "NSPhotoLibraryAddUsageDescription": "Cesto needs to save photos to your library when you choose to.",
+        "NSLocationWhenInUseUsageDescription": "Cesto uses your location to show delivery availability and the right prices for your area."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#054EE8"
+      },
+      "package": "es.cesto.app",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ],
+      "versionCode": 7
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cesto needs access to your photos so you can choose a profile picture.",
+          "cameraPermission": "Cesto uses your camera so you can take a profile picture.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Cesto uses your location to show delivery availability and the right prices for your area.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#054EE8",
+          "defaultChannel": "default"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "buildToolsVersion": "36.0.0"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "6eca34e6-60aa-4224-ae8e-976a00539329"
+      }
+    }
+  }
+}

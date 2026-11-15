@@ -1,0 +1,184 @@
+# Render Blueprint — provisions the Cesto API web services.
+#
+# Two services share the same blueprint:
+#   - cesto-api          → production, tracks master, points at the prod Neon DB
+#   - cesto-api-staging  → tester sandbox, tracks the `staging` git branch,
+#                          points at a separate Neon DB and re-runs seed on
+#                          every deploy (the seed script is idempotent).
+#
+# Postgres is hosted externally on Neon; each service's DATABASE_URL is set
+# in the Render dashboard (sync: false → never committed). The recommended
+# wiring is one Neon project with two branches: `main` for prod and `staging`
+# for the tester DB, so they share a single Neon plan.
+#
+# Deploy via: Render dashboard → New → Blueprint → connect outis-9/cesto.
+# Both services come up at once; fill their env vars (DATABASE_URL +
+# Bunny keys) and they go live.
+
+services:
+  # ── PRODUCTION API ───────────────────────────────────────────────────────
+  - type: web
+    name: cesto-api
+    runtime: node
+    region: virginia
+    plan: free
+    branch: master
+    rootDir: packages/api
+    autoDeploy: true
+    healthCheckPath: /api/health
+    buildCommand: >
+      cd ../.. &&
+      npm ci --include=dev &&
+      cd packages/api &&
+      npx prisma generate &&
+      npx tsc &&
+      (if [ -n "$DATABASE_URL" ]; then npx prisma migrate deploy; else echo "DATABASE_URL not set yet, skipping migrations"; fi)
+    startCommand: node dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ADMIN_SECRET
+        generateValue: true
+      - key: JWT_ADMIN_REFRESH_SECRET
+        generateValue: true
+      # THE DASHBOARD'S OWN LIST, copied verbatim on 2026-10-11 so a blueprint
+      # sync is a no-op rather than an outage.
+      #
+      # It used to read `cesto-web.vercel.app,cesto-admin.vercel.app`, which
+      # names neither real domain. A sync would have had cestoshop.com,
+      # www.cestoshop.com and admin.cestoshop.com all refused by their own
+      # API — and the preview patterns below would NOT have covered it,
+      # because they only match *.vercel.app hosts, never a custom domain.
+      #
+      # Only the three custom domains in this list actually do any work.
+      # cesto-web-three.vercel.app is already matched by the
+      # /^https:\/\/cesto-web(?:-[a-z0-9]+)*…/ pattern in server.ts, so it is
+      # redundant — kept because this value mirrors the dashboard, and a
+      # mirror with an edit in it is not a mirror.
+      - key: CORS_ORIGINS
+        value: https://cestoshop.com,https://www.cestoshop.com,https://admin.cestoshop.com,https://cesto-web-three.vercel.app
+      # THE APEX, no `www`. Every emailed link is built from this — order
+      # confirmations, password resets, client and rep welcomes.
+      #
+      # It pointed at cesto-web.vercel.app, an ABANDONED deployment that
+      # answers 200, so a sync would not have produced a 404 anybody
+      # reported: it would have sent every customer clicking a link in an
+      # email to a page that looks like the shop and is not. Checked on
+      # 2026-10-11, it serves no app bundle at all, while the live site
+      # serves index-CWL_lWyy.js.
+      - key: WEB_URL
+        value: https://cestoshop.com
+      # Where ops links in notification emails point — a new order, a lead, a
+      # support thread, a rashan lead. Read in six places in the API, all
+      # falling back to http://localhost:5173, and it was declared NOWHERE in
+      # this file. Writing it down is what stops the fallback shipping.
+      - key: ADMIN_URL
+        value: https://admin.cestoshop.com
+      # Bunny.net image storage + delivery. BUNNY_STORAGE_KEY is the storage
+      # zone password (zone-wide read/write) — server-side only.
+      # BUNNY_STORAGE_HOST is optional; omit for the Frankfurt default.
+      - key: BUNNY_STORAGE_ZONE
+        sync: false
+      - key: BUNNY_STORAGE_KEY
+        sync: false
+      - key: BUNNY_CDN_URL
+        sync: false
+      - key: BUNNY_STORAGE_HOST
+        sync: false
+
+  # ── STAGING API (tester sandbox) ─────────────────────────────────────────
+  # Tracks the `staging` git branch. Runs migrations + the essentials-only
+  # seed (admin user only — no catalogue) on every deploy. Testers populate
+  # the catalogue themselves through the admin panel.
+  #
+  # To wipe and start over: drop the Neon staging branch, re-create from main,
+  # redeploy. First boot will migrate the empty DB and create the admin again.
+  - type: web
+    name: cesto-api-staging
+    runtime: node
+    region: virginia
+    plan: free
+    branch: staging
+    rootDir: packages/api
+    autoDeploy: true
+    healthCheckPath: /api/health
+    buildCommand: >
+      cd ../.. &&
+      npm ci --include=dev &&
+      cd packages/api &&
+      npx prisma generate &&
+      npx tsc &&
+      (if [ -n "$DATABASE_URL" ]; then npx prisma migrate deploy && npx ts-node prisma/seed-essentials.ts; else echo "DATABASE_URL not set yet, skipping migrations"; fi)
+    startCommand: node dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ADMIN_SECRET
+        generateValue: true
+      - key: JWT_ADMIN_REFRESH_SECRET
+        generateValue: true
+      # The two hosts that actually serve, confirmed against the dashboard on
+      # 2026-10-11. The previous value named cesto-web-staging (a dead
+      # project) and cesto-admin-avlk (renamed since), so a blueprint sync
+      # would have replaced a working allowlist with a broken one.
+      #
+      # Both are ALSO matched by VERCEL_PREVIEW_PATTERNS in server.ts, which
+      # is what has been admitting them while this list was wrong — so the
+      # value being stale was invisible rather than harmless.
+      - key: CORS_ORIGINS
+        value: https://cesto-web-staging-peach.vercel.app,https://cesto-admin-staging.vercel.app
+      # THE HOST WITH THE `-peach`, which is the one that serves.
+      #
+      # Vercel appended the suffix to the staging project's URL; the bare
+      # cesto-web-staging.vercel.app is a different, dead project that 404s on
+      # every route — verified again on 2026-10-11, root and /sales both 404
+      # while -peach answers 200.
+      #
+      # This is the base for every link a customer or a rep is emailed:
+      # salesLoginUrl() is WEB_URL + '/sales', storefrontLoginUrl() is
+      # WEB_URL + '/login'. Pointing it at the dead host meant a new rep's
+      # welcome email sent them to a 404 — the one part of that flow that
+      # fails without anybody seeing an error.
+      - key: WEB_URL
+        value: https://cesto-web-staging-peach.vercel.app
+      # Staging's own admin, for the same six ops emails. Absent before, so
+      # anything staging sent linked an ops reader to http://localhost:5173.
+      #
+      # Written WITHOUT a trailing slash, which is this file's convention for
+      # every other URL in it. The dashboard carries one and that is fine:
+      # all six readers interpolate through `.replace(/\/$/, '')`, so
+      # ".../orders/x" never comes out as "...//orders/x". Worth knowing
+      # before adding a seventh reader — strip it there too, or this stops
+      # being a detail nobody has to think about.
+      - key: ADMIN_URL
+        value: https://cesto-admin-staging.vercel.app
+      # Bunny.net image storage + delivery. BUNNY_STORAGE_KEY is the storage
+      # zone password (zone-wide read/write) — server-side only.
+      # BUNNY_STORAGE_HOST is optional; omit for the Frankfurt default.
+      - key: BUNNY_STORAGE_ZONE
+        sync: false
+      - key: BUNNY_STORAGE_KEY
+        sync: false
+      - key: BUNNY_CDN_URL
+        sync: false
+      - key: BUNNY_STORAGE_HOST
+        sync: false
+      # Set via the Render dashboard. seed-essentials.ts refuses to seed the
+      # admin account unless this is present (min 10 chars). Rotate here to
+      # rotate the staging admin password on next deploy.
+      - key: ADMIN_SEED_PASSWORD
+        sync: false
+      - key: ADMIN_SEED_EMAIL
+        sync: false

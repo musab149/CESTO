@@ -1,0 +1,1063 @@
+/* ─── FONTS — DM Sans (display + UI + body, single sans) + JetBrains Mono (numerics) ──
+   FIRST, before tailwindcss, and it has to stay first. An @import is only
+   valid ahead of every other rule; `@import "tailwindcss"` is inlined into a
+   wall of rules, so a url() import after it was dropped from the build and the
+   whole web app — shop and rep panel — rendered in the system font until
+   2026-10-27. apps/admin/src/app.css has always had them in this order. */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800;9..40,900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@import "tailwindcss";
+
+/* ─── DESIGN SYSTEM — "Cesto" ─────────────────────────────
+   Vivid royal-blue primary with a fresh-green accent. Same neutral
+   surfaces / typography / shadows as before — only the hue swapped.
+   ───────────────────────────────────────────────────────── */
+@theme {
+  /* ─ Brand blues — royal scale anchored on #054EE8 ─ */
+  --color-brand-deepest: #022B91;   /* deep navy */
+  --color-brand:         #054EE8;   /* primary */
+  --color-brand-mid:     #2A6AEF;   /* hover */
+  --color-brand-light:   #7AA1F6;   /* tint */
+  --color-brand-soft:    #B6CBFA;   /* soft fill */
+  --color-brand-mist:    #DCE6FD;   /* panel wash */
+  --color-brand-whisper: #F0F4FE;   /* canvas accent */
+
+  /* ─ Fresh-green accent — for deals, hot items, badges ─
+     (Variable name stays "amber-*" to avoid touching ~30 files.) */
+  --color-amber-deep:    #5FA133;   /* darker green */
+  --color-amber:         #7FC646;   /* primary accent — fresh leaf */
+  --color-amber-mid:     #98D265;   /* hover */
+  --color-amber-mist:    #E9F4DC;   /* soft fill */
+
+  /* ─ Cool — appliances / electronics ─ */
+  --color-cool-deep:     #1E3A8A;   /* indigo-900 */
+  --color-cool:          #3B82F6;   /* blue-500 */
+  --color-cool-soft:     #BFDBFE;   /* blue-200 */
+  --color-cool-mist:     #DBEAFE;   /* blue-100 */
+
+  /* ─ Surfaces — soft cream and mint whispers ─ */
+  --color-surface-linen: #FAFBF8;   /* page canvas — warmer off-white */
+  --color-surface-cream: #FFFFFF;   /* cards */
+  --color-surface-white: #FFFFFF;
+  --color-surface-sand:  #F2F5F0;   /* inset wells */
+  --color-surface-mint:  #E8F5EC;   /* soft mint panels (Firangi-style) */
+  --color-surface-sage:  #DFEFE3;   /* slightly deeper mint for hovers */
+  --color-surface-dune:  #EFEAE1;   /* warm neutral card */
+
+  /* ─ The rep panel's named colours (2026-10-28) ─
+     Were hex values written into the rep screens; named so its dark mode
+     (html[data-sales-theme="dark"] .sales-app, below) can repaint them. The
+     light values are exactly the old hexes. `card` is a card's surface —
+     white here — and `veil` the dark wash behind a dialog, which stays dark
+     in both themes where `ink` does not. */
+  --color-card: #FFFFFF;
+  --color-veil: #0D1B2E;
+  /* Words in the brand colour on a pale blue fill — a chosen option. */
+  --color-brand-ink: #022B91;
+  /* The shop's header bars (2026-10-28): the brand blue here; a deep navy
+     blue in the dark, where a bright band across the page would glare. */
+  --color-brand-bar: #054EE8;
+  /* Words on the green accent fill (a count badge, "NEW"): dark in both
+     themes, as the fill itself does not change. */
+  --color-on-accent: #0F172A;
+  /* A band that is dark in both themes — the footer, a dark promo box —
+     where `ink` would turn light in the dark. */
+  --color-night: #0F172A;
+  /* A deeper mint line (the Home Grocery steps). */
+  --color-surface-leaf: #CFE5D5;
+  /* The big blue panels (sign-in, the trade page) run deep → brand → lighter;
+     in the dark the same run, turned down, so they never outshine the page. */
+  --color-hero-1: #022B91;
+  --color-hero-2: #054EE8;
+  --color-hero-3: #2A6AEF;
+  /* The Cesto Business strip over the header: a navy field with two glows. */
+  /* A shop's banner with no cover (lib/logoPlate bannerWash): white into cream. */
+  --color-banner-start: #FFFFFF;
+  --color-banner-end:   #F5F0E8;
+  --color-strip:   #022B91;
+  --color-strip-a: #0A3AB4;
+  --color-strip-b: #063399;
+  /* Status tints, one lightness family: a pill's fill (bg), its words (fg),
+     its dot; a row's wash and its hover (wash-2). */
+  --color-st-emerald-bg: #E3F4EC;
+  --color-st-emerald-fg: #0B7A52;
+  --color-st-emerald-dot: #13A06C;
+  --color-st-emerald-wash: #F1FAF5;
+  --color-st-emerald-wash-2: #E7F5ED;
+  --color-st-amber-bg: #FCF1DC;
+  --color-st-amber-fg: #9A5B00;
+  --color-st-amber-dot: #E89B12;
+  --color-st-amber-wash: #FFF9EC;
+  --color-st-amber-wash-2: #FDF2DC;
+  --color-st-rose-bg: #FCEAED;
+  --color-st-rose-fg: #B42A3F;
+  --color-st-rose-dot: #DE4A60;
+  --color-st-rose-wash: #FEF5F6;
+  --color-st-rose-wash-2: #FCECEF;
+  --color-st-slate-bg: #EDF0F5;
+  --color-st-slate-fg: #4C5870;
+  --color-st-slate-dot: #8792A6;
+  --color-st-slate-wash: #F5F7FA;
+  --color-st-slate-chip: #E4E8EF;
+  --color-st-violet-bg: #EFECFD;
+  --color-st-violet-fg: #5A47D1;
+  --color-st-violet-dot: #7A68E6;
+  --color-st-sky-bg: #E3F3F8;
+  --color-st-sky-fg: #0B6E8A;
+  --color-st-sky-dot: #1497BD;
+  --color-st-blue-bg: #E8F0FE;
+  --color-st-blue-fg: #1F5FD6;
+  --color-st-blue-dot: #2F6EF0;
+  --color-st-orange-bg: #FFEBDD;
+  --color-st-orange-fg: #E0590B;
+  /* The dashboard's two tinted money cards: wash from → to, ring, icon tile. */
+  --color-st-emerald-soft: #F2FBF6;
+  --color-st-emerald-soft-2: #E0F4E8;
+  --color-st-emerald-ring: #C2E6D1;
+  --color-st-emerald-tile: #C9EDD8;
+  --color-st-orange-soft: #FFF7F0;
+  --color-st-orange-soft-2: #FFEADB;
+  --color-st-orange-ring: #F6D3B6;
+  --color-st-orange-tile: #FFDCC2;
+  /* The counts card's four sections, the same way: wash from → to, ring, arrow. */
+  --color-st-sky-soft: #F1FAFC;
+  --color-st-sky-soft-2: #DEF1F7;
+  --color-st-sky-ring: #BEE2EE;
+  --color-st-sky-tile: #C9E9F3;
+  --color-st-blue-soft: #F4F8FF;
+  --color-st-blue-soft-2: #E5EEFE;
+  --color-st-blue-ring: #CCDCFB;
+  --color-st-blue-tile: #D3E1FD;
+  --color-st-violet-soft: #F7F5FF;
+  --color-st-violet-soft-2: #EBE7FD;
+  --color-st-violet-ring: #D5CEF8;
+  --color-st-violet-tile: #DCD5FB;
+  --color-st-amber-soft: #FFFAF0;
+  --color-st-amber-soft-2: #FDEFD3;
+  --color-st-amber-ring: #F1D9A4;
+  --color-st-amber-tile: #FAE3B5;
+  /* The greeting card's wash. */
+  --color-st-greet-1: #F6F9FF;
+  --color-st-greet-2: #EBF1FF;
+  --color-st-greet-3: #DCE7FE;
+
+  /* ─ Text — modern slate ─ */
+  --color-ink:       #0F172A;       /* slate-900 */
+  --color-charcoal:  #1E293B;       /* slate-800 */
+  --color-gray:      #475569;       /* slate-600 */
+  --color-muted:     #94A3B8;       /* slate-400 */
+  --color-border:    #E2E8F0;       /* slate-200 */
+
+  /* ─ Status ─ */
+  --color-danger:     #DC2626;
+  --color-danger-bg:  #FEE2E2;
+  --color-info:       #2563EB;
+  --color-info-bg:    #DBEAFE;
+  --color-success:    #16A34A;
+  --color-success-bg: #DCFCE7;
+  /* Success keeps a green hue (universal "go") even though brand is blue. */
+  --color-warning:    #D97706;   /* amber-yellow — independent from brand accent */
+  --color-warning-bg: #FEF3C7;
+  /* WhatsApp's own green, for the button that opens a chat with us — the
+     colour is how people recognise it before they read anything. */
+  --color-whatsapp:   #25D366;
+
+  /* ─ Fonts — DM Sans for everything UI / body / display ─ */
+  --font-display: 'DM Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-body:    'DM Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-ui:      'DM Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+
+  /* ─ Shadows — soft, modern, neutral ─ */
+  --shadow-card:       0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 6px rgba(15, 23, 42, 0.04);
+  --shadow-card-hover: 0 4px 12px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.08);
+  --shadow-float:      0 10px 40px rgba(15, 23, 42, 0.10), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-sheet:      0 -8px 32px rgba(15, 23, 42, 0.08);
+  --shadow-modal:      0 32px 80px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06);
+  --shadow-nav:        0 1px 0 rgba(226, 232, 240, 0.8);
+  --shadow-inset-soft: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-glow-brand: 0 0 0 4px rgba(5, 78, 232, 0.14);
+  --shadow-brand:      0 4px 14px rgba(5, 78, 232, 0.28);
+}
+
+/* ─── BASE ─────────────────────────────────────────────── */
+html, body {
+  background-color: var(--color-surface-linen);
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+}
+
+/* Base-layer defaults so Tailwind font-weight utilities (font-medium,
+   font-semibold, font-bold, …) win against these. Without the layer, the
+   plain `.font-display { font-weight: 700 }` rule beats every utility
+   applied alongside it — which makes dashboards using semibold render as
+   bold. Bare `<h1>` etc. still get 700 from this rule; utilities override
+   only when explicitly present. */
+@layer base {
+  h1, h2, h3, h4, h5, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+
+  /* ─── PARTNER APP SCOPE ───────────────────────────────────
+     Partner mounts inside apps/web but was designed against admin's
+     CSS. Admin sets NO global rules on `.font-display` — so on admin,
+     an input / table cell / span with just `font-display` renders at
+     DM Sans's natural weight (400) and tracking (0). Inside apps/web
+     the two rules above (letter-spacing -0.02em, font-weight 700 on
+     .font-display) push every un-utility-ed element to bold + tight —
+     which is why partner inputs, dropdowns, and cells looked heavier
+     than admin's. Scoping to `.partner-app` restores admin behaviour
+     inside partner without touching customer web.
+     Kept inside @layer base so Tailwind's `@layer utilities` still
+     wins — `<h1 class="font-display font-bold">` still renders 700
+     because the utility class beats these base rules by layer order,
+     not selector specificity. */
+  .partner-app,
+  .partner-app *,
+  .sales-app,
+  .sales-app * {
+    letter-spacing: normal;
+  }
+  .partner-app .font-display,
+  .sales-app .font-display {
+    font-weight: normal;
+    letter-spacing: normal;
+  }
+}
+
+/* Partner surface tokens — restore admin's warm-cream fills for inputs,
+   table headers, and hover states. The customer web deliberately flattens
+   `--color-surface-cream` to pure white (see @theme block above) because
+   product cards live on `--color-surface-linen` and want a paper-white
+   contrast. Partner dashboard was designed against admin's palette, where
+   cream is a subtle off-white (#FAFAF7) that gives filter selects, search
+   fields, and table headers their signature warm fill. Overriding just
+   inside `.partner-app` restores that look without touching customer web.
+   Kept outside `@layer base` so it wins against Tailwind's utility layer —
+   Tailwind's `bg-surface-cream` compiles to `background-color:
+   var(--color-surface-cream)`, which resolves against the scoped value
+   whenever the element is rendered inside `.partner-app`. */
+.partner-app {
+  --color-surface-linen: #F5F0E8;   /* admin page-canvas cream; drives hover:bg-surface-linen */
+  --color-surface-cream: #FAFAF7;   /* admin input/table-header fill */
+}
+
+/* Sales-rep surface tokens (redesigned 2026-10-26, the user's call: the
+   admin's warm linen and greys "absurd" beside the brand blue).
+
+   The rep panel began as admin's screens ported into apps/web and borrowed
+   admin's warm palette. It is its own product now, so it gets a palette built
+   around the blue: a cool porcelain canvas, white cards on hairlines, a
+   navy-slate ink, and status tints that share one lightness so no pill
+   shouts over another. Scoped here, so the customer shop is untouched.
+
+   `amber-*` is the customer app's GREEN accent under an old name; the rep
+   panel uses it for pending states, so in here it is amber again. */
+.sales-app {
+  /* Surfaces */
+  --color-surface-linen: #F1F4F9;   /* canvas — cool porcelain */
+  --color-surface-cream: #F7F9FC;   /* wells: inputs, table heads, row hover */
+  --color-surface-sand:  #ECF0F6;
+  --color-border:        #E2E7EF;
+
+  /* Text — navy-slate, so it belongs to the blue */
+  --color-ink:      #0D1B2E;
+  --color-charcoal: #1E2B40;
+  --color-gray:     #4C5870;
+  --color-muted:    #8792A6;
+
+  /* Status — one family */
+  --color-success:    #0B8A5C;
+  --color-success-bg: #E3F4EC;
+  --color-warning:    #B26A00;
+  --color-warning-bg: #FCF1DC;
+  --color-danger:     #C42F45;
+  --color-danger-bg:  #FCEAED;
+  --color-info:       #1F5FD6;
+  --color-info-bg:    #E8F0FE;
+  --color-amber-deep: #B26A00;
+  --color-amber:      #F0A21A;
+  --color-amber-mid:  #F5B748;
+  --color-amber-mist: #FCF1DC;
+
+  /* Shadows — cool and tight; a card is lifted by its hairline, not a bloom */
+  --shadow-card:       0 1px 2px rgba(13, 27, 46, 0.04), 0 1px 3px rgba(13, 27, 46, 0.05);
+  --shadow-card-hover: 0 8px 24px -6px rgba(13, 27, 46, 0.10), 0 2px 4px rgba(13, 27, 46, 0.04);
+}
+
+/* A cool shimmer to match, with a row's radius rather than a product card's. */
+.sales-app .skeleton {
+  background: linear-gradient(90deg, #E9EDF4 25%, #F5F7FB 50%, #E9EDF4 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+/* ─── THE REP PANEL IN THE DARK (2026-10-28) ──────────────
+   The user's ask: "implement the dark mode reps... do it properly on each
+   page carefully". The rep's choice — light, dark or the device's — sets
+   `data-sales-theme` on <html> while the panel is open (sales/lib/theme.ts,
+   and index.html before the first paint), so every .sales-app — the layout
+   and each dialog's own portal — repaints from the same tokens. The shop
+   never sees the attribute.
+
+   The same navy family as the light panel, turned down: a deep navy canvas,
+   cards a step up, wells a step above those; the ink a cool off-white; the
+   brand blue lifted just enough to read on navy while white words still read
+   on it. The status tints keep one lightness among themselves — dark fills,
+   pale words. */
+/* !important: index.html paints <body> cream inline, for the shop's first frame. */
+html[data-sales-theme="dark"],
+html[data-sales-theme="dark"] body {
+  background-color: #0B1220 !important;
+  color-scheme: dark;
+}
+html[data-sales-theme="dark"] .sales-app {
+  color-scheme: dark;
+
+  --color-surface-linen: #0B1220;   /* canvas */
+  --color-card:          #121B2C;   /* cards */
+  --color-surface-cream: #172235;   /* wells: inputs' rest, table heads, row hover */
+  --color-surface-sand:  #1D2A40;
+  --color-border:        #3A4A66;   /* a light line on navy (user, 2026-10-28: "always use the very light border everywhere") */
+  --color-veil:          #02060E;
+
+  --color-ink:      #E8EDF6;
+  --color-charcoal: #CED7E6;
+  --color-gray:     #9DA9BF;
+  --color-muted:    #7A889F;
+
+  --color-brand:         #3474F6;
+  --color-brand-mid:     #4C86FF;
+  --color-brand-deepest: #0A2C86;
+  --color-brand-light:   #6F9BFF;
+  --color-brand-soft:    #2B4785;
+  --color-brand-mist:    #152548;   /* deep enough for blue words on it (3.6:1) */
+  --color-brand-whisper: #121F3B;
+  --color-brand-ink:     #9DBBFF;
+
+  --color-success:    #22B07D;
+  --color-success-bg: #10291F;
+  --color-warning:    #E9A23B;
+  --color-warning-bg: #2E2312;
+  --color-danger:     #EF5468;
+  --color-danger-bg:  #331820;
+  --color-info:       #6F9BFF;
+  --color-info-bg:    #142546;
+  --color-amber-deep: #E9A23B;
+  --color-amber:      #F0A21A;
+  --color-amber-mid:  #F5B748;
+  --color-amber-mist: #2E2312;
+
+  --color-st-emerald-bg: #123126;
+  --color-st-emerald-fg: #57D3A0;
+  --color-st-emerald-dot: #2BB97E;
+  --color-st-emerald-wash: #12261F;
+  --color-st-emerald-wash-2: #163027;
+  --color-st-amber-bg: #33270F;
+  --color-st-amber-fg: #F1BE5C;
+  --color-st-amber-dot: #E89B12;
+  --color-st-amber-wash: #221E14;
+  --color-st-amber-wash-2: #2B2516;
+  --color-st-rose-bg: #3A1922;
+  --color-st-rose-fg: #FF8B9B;
+  --color-st-rose-dot: #E85A6F;
+  --color-st-rose-wash: #24171F;
+  --color-st-rose-wash-2: #2E1B25;
+  --color-st-slate-bg: #1F2A3D;
+  --color-st-slate-fg: #A8B4C8;
+  --color-st-slate-dot: #7D8AA2;
+  --color-st-slate-wash: #172234;
+  --color-st-slate-chip: #26324A;
+  --color-st-violet-bg: #262046;
+  --color-st-violet-fg: #ADA3FF;
+  --color-st-violet-dot: #8D7EF0;
+  --color-st-sky-bg: #10303B;
+  --color-st-sky-fg: #69CBE6;
+  --color-st-sky-dot: #22A6CC;
+  --color-st-blue-bg: #152747;
+  --color-st-blue-fg: #8DB3FF;
+  --color-st-blue-dot: #4C86FF;
+  --color-st-orange-bg: #36210F;
+  --color-st-orange-fg: #FF9A57;
+  --color-st-emerald-soft: #10261D;
+  --color-st-emerald-soft-2: #143224;
+  --color-st-emerald-ring: #1F4634;
+  --color-st-emerald-tile: #1B3F2E;
+  --color-st-orange-soft: #2A1C10;
+  --color-st-orange-soft-2: #362313;
+  --color-st-orange-ring: #533318;
+  --color-st-orange-tile: #4A2C13;
+  --color-st-sky-soft: #0F222B;
+  --color-st-sky-soft-2: #132D38;
+  --color-st-sky-ring: #1D4554;
+  --color-st-sky-tile: #1A4050;
+  --color-st-blue-soft: #13213C;
+  --color-st-blue-soft-2: #172A4D;
+  --color-st-blue-ring: #24396A;
+  --color-st-blue-tile: #20376A;
+  --color-st-violet-soft: #19162F;
+  --color-st-violet-soft-2: #211C40;
+  --color-st-violet-ring: #342C62;
+  --color-st-violet-tile: #2E2759;
+  --color-st-amber-soft: #211A0F;
+  --color-st-amber-soft-2: #2B2213;
+  --color-st-amber-ring: #4A3A1A;
+  --color-st-amber-tile: #45351A;
+  --color-st-greet-1: #111D33;
+  --color-st-greet-2: #142445;
+  --color-st-greet-3: #183059;
+
+  /* A shadow does little on navy; the hairline does the lifting. */
+  --shadow-card:       0 1px 2px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-card-hover: 0 8px 24px -6px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.30);
+  --shadow-float:      0 10px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-modal:      0 32px 80px rgba(0, 0, 0, 0.60), 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-sheet:      0 -8px 32px rgba(0, 0, 0, 0.45);
+}
+/* A product photo stays in a light frame: most are shot on white and drawn
+   with multiply, which melts that white into a light well and turns it to
+   mud on navy. The tags sitting on the photo are read against the frame, so
+   the frame keeps the light palette for them. */
+html[data-sales-theme="dark"] .sales-app .sales-photo {
+  background-color: #E4E9F1;
+  --color-card: #FFFFFF;
+  --color-ink: #0D1B2E;
+  --color-gray: #4C5870;
+  --color-muted: #8792A6;
+  --color-border: #E2E7EF;
+  --color-brand: #054EE8;
+  --color-brand-mist: #DCE6FD;
+  --color-success: #0B8A5C;
+  --color-warning: #B26A00;
+  --color-danger: #C42F45;
+  --color-info: #1F5FD6;
+  --color-info-bg: #E8F0FE;
+}
+html[data-sales-theme="dark"] .sales-app .skeleton {
+  background: linear-gradient(90deg, #172235 25%, #1F2C44 50%, #172235 75%);
+  background-size: 200% 100%;
+}
+html[data-sales-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #2A3854;
+  border-color: #0B1220;
+}
+
+/* ─── THE SHOP IN THE DARK (2026-10-28) ───────────────────
+   The user's ask: "go for dark mode implementation of cestoshop website...
+   do it carefully and each and every thing and do it the way you did it for
+   rep dashboard". The same way: the shopper's choice — light, dark or the
+   device's — sets `data-shop-theme` on <html> while a shop layout is open
+   (lib/shopTheme.ts, and index.html before the first paint), and the tokens
+   repaint. On <html> itself rather than under a class, because the shop's
+   tokens are the root ones; the rep and partner panels mount without the
+   attribute, so they never see it.
+
+   The rep panel's navy family, so Cesto has one dark: a deep navy canvas,
+   cards a step up, wells a step above; a cool off-white ink; the brand blue
+   lifted to read on navy. The fresh-green accent keeps its fill, with dark
+   words on it (`on-accent`); the header bars go deep navy-blue (`brand-bar`). */
+html[data-shop-theme="dark"],
+html[data-shop-theme="dark"] body {
+  /* !important: index.html paints <body> cream inline, for the first frame. */
+  background-color: #0B1220 !important;
+  color-scheme: dark;
+}
+html[data-shop-theme="dark"] {
+  --color-surface-linen: #0B1220;   /* canvas */
+  --color-surface-cream: #121B2C;   /* cards (white in the light shop) */
+  --color-surface-white: #121B2C;
+  --color-card:          #121B2C;
+  --color-surface-sand:  #172235;   /* inset wells */
+  --color-surface-mint:  #10261D;   /* the soft green panels */
+  --color-surface-sage:  #143224;
+  --color-surface-dune:  #1A2335;
+  --color-border:        #3A4A66;   /* a light line on navy (user, 2026-10-28: "always use the very light border everywhere") */
+  --color-veil:          #02060E;
+
+  --color-ink:      #E8EDF6;
+  --color-charcoal: #CED7E6;
+  --color-gray:     #9DA9BF;
+  --color-muted:    #7A889F;
+
+  --color-brand:         #3474F6;
+  --color-brand-mid:     #4C86FF;
+  --color-brand-deepest: #2459D6;   /* a fill: blue buttons' hover, gradients' end */
+  --color-brand-light:   #6F9BFF;
+  --color-brand-soft:    #2B4785;
+  --color-brand-mist:    #152548;
+  --color-brand-whisper: #121F3B;
+  --color-brand-ink:     #9DBBFF;   /* words in blue */
+  --color-brand-bar:     #0F1D3D;
+  --color-night:         #070C17;
+  --color-hero-1:        #0C1834;
+  --color-hero-2:        #15306B;
+  --color-hero-3:        #1E47A8;
+  --color-banner-start:  #1D2A40;
+  --color-banner-end:    #121B2C;
+  --color-strip:         #0A1530;
+  --color-strip-a:       #13285A;
+  --color-strip-b:       #0F2150;
+
+  --color-amber-deep: #8FD45A;      /* the green accent's words */
+  --color-amber:      #7FC646;
+  --color-amber-mid:  #98D265;
+  --color-amber-mist: #17291A;
+
+  --color-cool-deep: #9DBBFF;
+  --color-cool:      #4C86FF;
+  --color-cool-soft: #1E3A6E;
+  --color-cool-mist: #152548;
+
+  --color-success:    #3DD68C;
+  --color-success-bg: #10291F;
+  --color-warning:    #E9A23B;
+  --color-warning-bg: #2E2312;
+  --color-danger:     #F06478;
+  --color-danger-bg:  #331820;
+  --color-info:       #6F9BFF;
+  --color-info-bg:    #142546;
+
+  --color-surface-leaf: #1E4232;
+
+  /* The few of Tailwind's own greys the shop still names. */
+  --color-gray-100: #19243A;
+  --color-gray-300: #2A3854;
+
+  /* The status tints the rep panel names (st-*), dark as there. */
+  --color-st-emerald-bg: #123126;
+  --color-st-emerald-fg: #57D3A0;
+  --color-st-emerald-dot: #2BB97E;
+  --color-st-emerald-wash: #12261F;
+  --color-st-emerald-wash-2: #163027;
+  --color-st-amber-bg: #33270F;
+  --color-st-amber-fg: #F1BE5C;
+  --color-st-amber-dot: #E89B12;
+  --color-st-amber-wash: #221E14;
+  --color-st-amber-wash-2: #2B2516;
+  --color-st-rose-bg: #3A1922;
+  --color-st-rose-fg: #FF8B9B;
+  --color-st-rose-dot: #E85A6F;
+  --color-st-rose-wash: #24171F;
+  --color-st-rose-wash-2: #2E1B25;
+  --color-st-slate-bg: #1F2A3D;
+  --color-st-slate-fg: #A8B4C8;
+  --color-st-slate-dot: #7D8AA2;
+  --color-st-slate-wash: #172234;
+  --color-st-slate-chip: #26324A;
+  --color-st-violet-bg: #262046;
+  --color-st-violet-fg: #ADA3FF;
+  --color-st-violet-dot: #8D7EF0;
+  --color-st-sky-bg: #10303B;
+  --color-st-sky-fg: #69CBE6;
+  --color-st-sky-dot: #22A6CC;
+  --color-st-blue-bg: #152747;
+  --color-st-blue-fg: #8DB3FF;
+  --color-st-blue-dot: #4C86FF;
+  --color-st-orange-bg: #36210F;
+  --color-st-orange-fg: #FF9A57;
+  --color-st-emerald-soft: #10261D;
+  --color-st-emerald-soft-2: #143224;
+  --color-st-emerald-ring: #1F4634;
+  --color-st-emerald-tile: #1B3F2E;
+  --color-st-orange-soft: #2A1C10;
+  --color-st-orange-soft-2: #362313;
+  --color-st-orange-ring: #533318;
+  --color-st-orange-tile: #4A2C13;
+  --color-st-sky-soft: #0F222B;
+  --color-st-sky-soft-2: #132D38;
+  --color-st-sky-ring: #1D4554;
+  --color-st-sky-tile: #1A4050;
+  --color-st-blue-soft: #13213C;
+  --color-st-blue-soft-2: #172A4D;
+  --color-st-blue-ring: #24396A;
+  --color-st-blue-tile: #20376A;
+  --color-st-violet-soft: #19162F;
+  --color-st-violet-soft-2: #211C40;
+  --color-st-violet-ring: #342C62;
+  --color-st-violet-tile: #2E2759;
+  --color-st-amber-soft: #211A0F;
+  --color-st-amber-soft-2: #2B2213;
+  --color-st-amber-ring: #4A3A1A;
+  --color-st-amber-tile: #45351A;
+  --color-st-greet-1: #111D33;
+  --color-st-greet-2: #142445;
+  --color-st-greet-3: #183059;
+
+  --shadow-card:       0 1px 2px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-card-hover: 0 8px 24px -6px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.30);
+  --shadow-float:      0 10px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-sheet:      0 -8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-modal:      0 32px 80px rgba(0, 0, 0, 0.60), 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-nav:        0 1px 0 rgba(58, 74, 102, 0.9);
+  --shadow-inset-soft: inset 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-glow-brand: 0 0 0 4px rgba(52, 116, 246, 0.30);
+  --shadow-brand:      0 4px 14px rgba(52, 116, 246, 0.35);
+}
+/* Things that stay light in the dark, as objects do: a product photo's frame
+   (shot on white, so a frame keeps every tile alike instead of white squares
+   on navy), a drawn paper note. `keep-light` brings the light palette back
+   for whatever sits on them; `photo-well` is that and the frame's colour. */
+html[data-shop-theme="dark"] .keep-light,
+html[data-shop-theme="dark"] .photo-well {
+  color-scheme: light;
+  --color-card: #FFFFFF;
+  --color-surface-cream: #FFFFFF;
+  --color-surface-linen: #F3F5F8;
+  --color-ink: #0F172A;
+  --color-charcoal: #1E293B;
+  --color-gray: #475569;
+  --color-muted: #94A3B8;
+  --color-border: #E2E8F0;
+  --color-brand: #054EE8;
+  --color-brand-soft: #B6CBFA;
+  --color-brand-mist: #DCE6FD;
+  --color-brand-ink: #022B91;
+  --color-amber-deep: #5FA133;
+  --color-amber-mist: #E9F4DC;
+  --color-success: #16A34A;
+  --color-danger: #DC2626;
+  --color-warning: #D97706;
+}
+/* The frame is a soft cool grey, not white (user, 2026-10-28: "what about
+   this product images background"), and the photo is multiplied into it: the
+   white the photo was shot on takes the frame's grey, so the tile stops
+   glaring off the navy while the product keeps its colours. */
+html[data-shop-theme="dark"] .photo-well {
+  background-color: #D8DEE8;
+}
+html[data-shop-theme="dark"] .photo-well img {
+  mix-blend-mode: multiply;
+}
+/* A tile the office painted pale, dark words on it, no picture (2026-10-29):
+   in the dark its colours wash toward the card's navy, kept faintly, and its
+   words take the light ink like the rest of the page. Without it the light
+   ink sat on the pastel and the headline all but vanished. (lib/logoPlate
+   paintedTile; a pale tile with a picture keeps the light palette instead.) */
+html[data-shop-theme="dark"] .tile-wash::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-card);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* A logo's plate (lib/logoPlate): the colour the office chose. A pale one —
+   white, nearly always — softens to the photo frame's grey in the dark, its
+   logo multiplied into it ("the white background color in brands cards").
+   The rep panel's brand tiles the same, on its own frame's grey. */
+.logo-plate { background-color: var(--plate, #FFFFFF); }
+html[data-shop-theme="dark"] .logo-plate.is-pale { background-color: #D8DEE8; }
+/* Over the rep's photo frame rule (same weight, later), so a plate in a real
+   colour keeps it there too. */
+html[data-sales-theme="dark"] .sales-app .logo-plate { background-color: var(--plate, #FFFFFF); }
+html[data-sales-theme="dark"] .sales-app .logo-plate.is-pale { background-color: #E4E9F1; }
+html[data-shop-theme="dark"] .logo-plate.is-pale img,
+html[data-sales-theme="dark"] .sales-app .logo-plate.is-pale img {
+  mix-blend-mode: multiply;
+}
+html[data-shop-theme="dark"] .skeleton {
+  background: linear-gradient(90deg, #172235 25%, #1F2C44 50%, #172235 75%);
+  background-size: 200% 100%;
+}
+html[data-shop-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #2A3854;
+  border-color: #0B1220;
+}
+
+/* ─ Eyebrow label ─ */
+.eyebrow {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-brand);
+}
+
+/* Premium hairline divider */
+.hairline {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--color-border), transparent);
+}
+
+/* ─── SHIMMER SKELETON ────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #EDF2EE 25%, #F7FAF7 50%, #EDF2EE 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 16px;
+}
+
+/* ─── SCROLLBARS ──────────────────────────────────────── */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 8px;
+  border: 2px solid var(--color-surface-linen);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
+
+
+/* ─── FOCUS ───────────────────────────────────────────── */
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-glow-brand);
+  border-radius: 12px;
+}
+
+/* ─── ANIMATIONS ──────────────────────────────────────── */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+@keyframes gentle-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.7; }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-slide-in-right { animation: slide-in-right 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-in        { animation: fade-in 0.2s ease-out both; }
+
+.rise-in     { animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise-in-1   { animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both; }
+.rise-in-2   { animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.16s both; }
+.rise-in-3   { animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.24s both; }
+.rise-in-4   { animation: rise-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.32s both; }
+
+.float-soft  { animation: float-soft 6s ease-in-out infinite; }
+
+/* Home Grocery list: each tick fills once, in order, on first paint. With
+   reduced motion the ticks are simply there. */
+@keyframes hg-tick {
+  from { opacity: 0; transform: scale(0.4); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.hg-tick { animation: hg-tick 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* Home Grocery basket: the staples drop in one after another, then the tag
+   swings into place. Replayed when the household size changes. */
+@keyframes hg-drop {
+  0%   { opacity: 0; transform: translateY(-130px) rotate(-6deg); }
+  55%  { opacity: 1; transform: translateY(7px) rotate(1.5deg); }
+  78%  { transform: translateY(-3px) rotate(-0.5deg); }
+  100% { opacity: 1; transform: translateY(0) rotate(0); }
+}
+.hg-drop {
+  animation: hg-drop 0.72s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@keyframes hg-swing {
+  0%   { opacity: 0; transform: translateY(-10px) rotate(-16deg); }
+  60%  { opacity: 1; transform: translateY(0) rotate(4deg); }
+  100% { opacity: 1; transform: translateY(0) rotate(-3deg); }
+}
+.hg-swing {
+  animation: hg-swing 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  transform-origin: 20% 0%;
+}
+/* QuantityField: iOS zooms the page when a field under 16px is focused, and
+   these sit in small steppers. On a touch screen the number is 16px. */
+@media (pointer: coarse) {
+  .qty-field { font-size: 16px; }
+}
+
+/* The Home Grocery link's basket (HopBasket in CustomerLayout): a hop with a
+   tilt, a squash on landing, a small rebound, then a rest — on a loop. */
+@keyframes hg-hop {
+  0%, 56%, 100% { transform: translateY(0) rotate(0) scale(1, 1); }
+  16% { transform: translateY(-4px) rotate(-10deg) scale(1, 1); }
+  30% { transform: translateY(0) rotate(0) scale(1.14, 0.84); }
+  40% { transform: translateY(-1.5px) rotate(5deg) scale(0.97, 1.04); }
+  48% { transform: translateY(0) rotate(0) scale(1.04, 0.96); }
+}
+.hg-hop {
+  animation: hg-hop 1.5s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hg-hop { animation: none; }
+}
+
+/* The end of a cycle (MonthBasket's loop): the staples lift out of the
+   basket in order and the tag lets go, before it refills. */
+@keyframes hg-leave {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-46px); }
+}
+@keyframes hg-tag-leave {
+  from { opacity: 1; transform: rotate(-3deg); }
+  to   { opacity: 0; transform: translateY(-8px) rotate(-10deg); }
+}
+.hg-basket.is-leaving .hg-drop {
+  animation: hg-leave 0.42s cubic-bezier(0.55, 0, 1, 0.45) both;
+  animation-delay: calc(var(--i) * 55ms);
+}
+.hg-basket.is-leaving .hg-swing {
+  animation: hg-tag-leave 0.3s ease-in both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hg-tick, .hg-drop { animation: none; }
+  .hg-swing { animation: none; transform: rotate(-3deg); }
+}
+
+/* Home Grocery fridge note: a sheet torn off a pad (the bitten top edge),
+   whose lines are crossed off one by one once `.is-on` arrives, then stamped.
+   `--i` is the line, `--n` how many lines there are. */
+.hg-sheet {
+  -webkit-mask: radial-gradient(circle 5px at 50% 0, #0000 98%, #000) 0 0 / 18px 100% repeat-x;
+  mask: radial-gradient(circle 5px at 50% 0, #0000 98%, #000) 0 0 / 18px 100% repeat-x;
+}
+@keyframes hg-strike {
+  from { transform: scaleX(0) rotate(-1.5deg); }
+  to   { transform: scaleX(1) rotate(-1.5deg); }
+}
+@keyframes hg-dim { to { color: var(--color-gray); } }
+@keyframes hg-stamp {
+  0%   { opacity: 0; transform: scale(1.7) rotate(-16deg); }
+  60%  { opacity: 1; transform: scale(0.94) rotate(-6deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-8deg); }
+}
+.hg-note .hg-strike { transform: scaleX(0) rotate(-1.5deg); transform-origin: left center; }
+.hg-note .hg-check  { opacity: 0; transform: scale(0.4); }
+.hg-note .hg-stamp  { opacity: 0; transform: rotate(-8deg); }
+.hg-note.is-on .hg-strike {
+  animation: hg-strike 0.36s cubic-bezier(0.65, 0, 0.35, 1) both;
+  animation-delay: calc(var(--i) * 0.3s + 0.25s);
+}
+.hg-note.is-on .hg-check {
+  animation: hg-tick 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(var(--i) * 0.3s + 0.4s);
+}
+.hg-note.is-on .hg-line {
+  animation: hg-dim 0.3s ease both;
+  animation-delay: calc(var(--i) * 0.3s + 0.45s);
+}
+.hg-note.is-on .hg-stamp {
+  animation: hg-stamp 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(var(--n) * 0.3s + 0.35s);
+}
+/* Clearing, between loops: every mark fades together from where it ended,
+   then the sheet is clean and the crossing-off starts again. The marks'
+   own animations set their opacity, so the fade replaces them rather than
+   transitioning over them. */
+@keyframes hg-strike-clear {
+  from { opacity: 1; transform: scaleX(1) rotate(-1.5deg); }
+  to   { opacity: 0; transform: scaleX(1) rotate(-1.5deg); }
+}
+@keyframes hg-mark-clear {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.85); }
+}
+@keyframes hg-stamp-clear {
+  from { opacity: 1; transform: rotate(-8deg); }
+  to   { opacity: 0; transform: scale(0.92) rotate(-8deg); }
+}
+@keyframes hg-undim {
+  from { color: var(--color-gray); }
+  to   { color: var(--color-ink); }
+}
+.hg-note.is-clearing .hg-strike { animation: hg-strike-clear 0.4s ease both; }
+.hg-note.is-clearing .hg-check  { animation: hg-mark-clear 0.4s ease both; }
+.hg-note.is-clearing .hg-stamp  { animation: hg-stamp-clear 0.4s ease both; }
+.hg-note.is-clearing .hg-line   { animation: hg-undim 0.4s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  .hg-note .hg-strike,
+  .hg-note.is-on .hg-strike { animation: none; transform: rotate(-1.5deg); }
+  .hg-note .hg-check,
+  .hg-note.is-on .hg-check  { animation: none; opacity: 1; transform: none; }
+  .hg-note .hg-line,
+  .hg-note.is-on .hg-line   { animation: none; color: var(--color-gray); }
+  .hg-note .hg-stamp,
+  .hg-note.is-on .hg-stamp  { animation: none; opacity: 1; }
+}
+
+/* ─── SELECTION ───────────────────────────────────────── */
+::selection {
+  background: var(--color-brand-mist);
+  /* brand-ink: the same navy in the light; a pale blue in the dark, where
+     brand-deepest is a fill. */
+  color: var(--color-brand-ink);
+}
+
+/* The rep panel's bottom sheets (Cuenta, the client picker) rise from the
+   bottom edge on a phone, as an app's do; from lg they are panels and stay
+   put. Nothing moves for someone who has asked for less motion. */
+@keyframes sales-sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (max-width: 1023px) {
+  .sales-sheet { animation: sales-sheet-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+}
+/* From lg the dialogs (components/Dialog) arrive their own way: a centred one
+   or a popover rises a little into place, a side panel slides in. */
+@keyframes sales-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (min-width: 1024px) {
+  .sales-pop  { animation: sales-pop 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  .sales-side { animation: slide-in-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+}
+/* The order builder's product panel: a drawer that slides in below xl, a
+   still column from xl — so it animates only while it is a drawer. */
+@media (max-width: 1279px) {
+  .sales-drawer { animation: slide-in-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sales-sheet, .sales-pop, .sales-side, .sales-drawer { animation: none; }
+}
+
+/* ─── BUSINESS HOME (2026-10-31) ─────────────────────────
+   What moves by itself: the order bar (the truck riding, a light running
+   along the filled road, the live dot breathing, the orders taking turns),
+   the banner ads (sliding along, any words over them rising in turn) and, while on screen, the logistics street's van. The bento comes in once, tile by tile, when it first scrolls into
+   view. A story's timer fills while it plays. Everything else moves only when
+   touched. With reduced motion, everything is simply where it ends.
+   Animations use `translate` / `scale`, never `transform`, so they do not undo
+   Tailwind's own translate classes on the same element. */
+
+/* the road (the order bar): filled to where the order is */
+/* the road draws in by scaling, so its WIDTH is free to glide when an order moves on live */
+@keyframes biz-road { from { transform: scaleX(0); } }
+.biz-route-fill { transform-origin: left center; animation: biz-road 1.2s cubic-bezier(0.22, 1, 0.36, 1) both; transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* the order bar */
+@keyframes biz-bob   { 0%, 100% { translate: 0 0; } 50% { translate: 0 -2px; } }
+@keyframes biz-sheen { from { left: -50%; } to { left: 100%; } }
+@keyframes biz-ping  { 0% { scale: 1; opacity: 0.6; } 80%, 100% { scale: 2.4; opacity: 0; } }
+@keyframes biz-swap  { from { opacity: 0; translate: 0 6px; } }
+.biz-bar-truck { animation: biz-bob 1.4s ease-in-out infinite; }
+.biz-bar-sheen { left: -50%; animation: biz-sheen 2.6s cubic-bezier(0.4, 0, 0.2, 1) 1.2s infinite; }
+.biz-live-dot  { animation: biz-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.biz-bar-swap  { animation: biz-swap 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* ── The app's sky (2026-10-31): fixed behind the business home wherever the
+   map can't run (no WebGL, reduced motion). ── */
+.biz-sky {
+  background:
+    radial-gradient(92rem 92rem at 108% 124%, rgba(255, 255, 255, 0.09) 29.5%, rgba(255, 255, 255, 0) 30%),
+    radial-gradient(72rem 72rem at 108% 124%, rgba(255, 255, 255, 0.07) 34.5%, rgba(255, 255, 255, 0) 35%),
+    radial-gradient(56rem 36rem at -8% -14%, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(168deg, #2E6FF2 0%, #1256E8 36%, #0B46C9 68%, #083A9E 100%);
+}
+html[data-sales-theme="dark"] .biz-sky {
+  background:
+    radial-gradient(92rem 92rem at 108% 124%, rgba(255, 255, 255, 0.05) 29.5%, rgba(255, 255, 255, 0) 30%),
+    radial-gradient(72rem 72rem at 108% 124%, rgba(255, 255, 255, 0.04) 34.5%, rgba(255, 255, 255, 0) 35%),
+    radial-gradient(56rem 36rem at -8% -14%, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 62%),
+    linear-gradient(168deg, #1C4FD0 0%, #0C3FB2 36%, #082F8C 68%, #062260 100%);
+}
+/* the panel header turns to blue glass while it floats over the sky */
+.biz-sky-glass {
+  background: rgba(13, 70, 201, 0.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html[data-sales-theme="dark"] .biz-sky-glass { background: rgba(7, 36, 110, 0.5); }
+/* …but over the map the header's pills float straight on the land (user, 2026-11-01) */
+html[data-biz-home="map"] .biz-sky-glass { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+@keyframes biz-map-text { from { opacity: 0; transform: translateY(22px); } }
+.biz-map-text { animation: biz-map-text 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* The map home, low-poly pass (2026-11-01): the words, the haze they stand in, the pins on the land. */
+.biz-map-haze { background: radial-gradient(120% 100% at 0% 100%, rgba(251, 247, 240, 0.97) 0%, rgba(251, 247, 240, 0.86) 30%, rgba(251, 247, 240, 0) 64%); }
+.biz-map-title, .biz-map-title-sky { font-family: 'Archivo', 'DM Sans', system-ui, sans-serif; font-stretch: 75%; font-weight: 800; letter-spacing: -0.005em; color: #131B45; }
+.biz-map-title-sky { color: #fff; }
+.biz-map-sub { font-family: 'Archivo', 'DM Sans', system-ui, sans-serif; font-weight: 500; color: #434B72; }
+.biz-map-count, .biz-map-count-sky { font-family: 'Archivo', 'DM Sans', system-ui, sans-serif; font-weight: 600; letter-spacing: 0.08em; color: #7D84A3; }
+.biz-map-count-sky { color: rgba(255, 255, 255, 0.65); }
+.biz-map-ink { color: #131B45; }
+.biz-map-ghost { background: #fff; color: #131B45; box-shadow: 0 1px 0 rgba(19, 27, 69, 0.06), 0 8px 22px -10px rgba(19, 27, 69, 0.45); }
+.biz-map-ghost:hover { background: #F3F5FB; }
+html[data-sales-theme="dark"] .biz-map-haze { background: radial-gradient(120% 100% at 0% 100%, rgba(7, 16, 46, 0.95) 0%, rgba(7, 16, 46, 0.82) 30%, rgba(7, 16, 46, 0) 64%); }
+html[data-sales-theme="dark"] .biz-map-title { color: #fff; }
+html[data-sales-theme="dark"] .biz-map-sub { color: rgba(255, 255, 255, 0.82); }
+html[data-sales-theme="dark"] .biz-map-count { color: rgba(255, 255, 255, 0.6); }
+html[data-sales-theme="dark"] .biz-map-ink { color: #fff; }
+html[data-sales-theme="dark"] .biz-map-ghost { background: #0F1B44; color: #fff; box-shadow: inset 0 0 0 1px #3A4A66; }
+html[data-sales-theme="dark"] .biz-map-ghost:hover { background: #16245A; }
+
+.biz-pin { position: absolute; left: 0; top: 0; will-change: transform; pointer-events: none; }
+.biz-pin-body { position: absolute; left: 0; bottom: -6px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; transition: opacity 0.35s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+.biz-pin-label { pointer-events: auto; display: inline-flex; align-items: center; gap: 5px; font-family: 'Archivo', 'DM Sans', system-ui, sans-serif; font-weight: 600; font-size: 14px; line-height: 1; color: #131B45; background: #fff; border-radius: 999px; padding: 7px 13px; box-shadow: 0 8px 20px -8px rgba(10, 20, 60, 0.4), 0 1px 2px rgba(10, 20, 60, 0.12); white-space: nowrap; }
+.biz-pin-stem { width: 1.5px; height: 16px; background: rgba(19, 27, 69, 0.55); }
+.biz-pin-dot { width: 12px; height: 12px; border-radius: 999px; background: #F2675A; box-shadow: 0 0 0 2.5px #fff, 0 2px 6px rgba(10, 20, 60, 0.35); }
+.biz-pin.is-brand .biz-pin-label { background: #0A47CE; color: #fff; }
+.biz-pin.is-brand .biz-pin-dot { background: #0A47CE; }
+.biz-pin.is-tag .biz-pin-dot { display: none; }
+.biz-pin.is-tag .biz-pin-stem { height: 10px; }
+.biz-pin.is-done .biz-pin-label { background: #1FA463; color: #fff; padding: 8px 15px; font-size: 15px; }
+.biz-pin.is-done .biz-pin-dot { background: #1FA463; }
+.biz-pin.is-done:not(.is-off) .biz-pin-body { animation: biz-pin-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.biz-pin.is-dim .biz-pin-body { opacity: 0.35; }
+.biz-pin.is-focus .biz-pin-body { transform: translateX(-50%) translateY(-4px) scale(1.08); }
+.biz-pin.is-focus .biz-pin-dot { animation: biz-pin-pulse 1.6s ease-out infinite; }
+@keyframes biz-pin-pulse { 0% { box-shadow: 0 0 0 2.5px #fff, 0 0 0 2.5px rgba(242, 103, 90, 0.6); } 100% { box-shadow: 0 0 0 2.5px #fff, 0 0 0 18px rgba(242, 103, 90, 0); } }
+@keyframes biz-pin-pop { from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.6); } }
+/* off beats dim and focus, whatever else the pin is wearing */
+.biz-pin.is-off.is-off .biz-pin-body { opacity: 0; }
+.biz-pin.is-off .biz-pin-label { pointer-events: none; }
+html[data-sales-theme="dark"] .biz-pin-label { background: #0F1B44; color: #fff; box-shadow: inset 0 0 0 1px #3A4A66, 0 8px 20px -8px rgba(0, 0, 0, 0.6); }
+html[data-sales-theme="dark"] .biz-pin-stem { background: rgba(255, 255, 255, 0.5); }
+html[data-sales-theme="dark"] .biz-pin-dot { box-shadow: 0 0 0 2.5px #0F1B44, 0 2px 6px rgba(0, 0, 0, 0.5); }
+html[data-sales-theme="dark"] .biz-pin.is-brand .biz-pin-label { background: #1E5EF0; }
+html[data-sales-theme="dark"] .biz-pin.is-done .biz-pin-label { background: #1FA463; }
+@keyframes biz-map-nudge { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
+.biz-map-nudge { animation: biz-map-nudge 1.6s ease-in-out infinite; }
+
+/* the bento */
+@keyframes biz-tile-in { from { opacity: 0; translate: 0 16px; scale: 0.98; } }
+.biz-bento-tile { opacity: 0; }
+.biz-bento-in .biz-bento-tile { opacity: 1; animation: biz-tile-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) calc(var(--i, 0) * 70ms) both; }
+
+/* a story, full screen */
+@keyframes biz-story-in   { from { opacity: 0; transform: scale(0.96); } }
+@keyframes biz-story-fade { from { opacity: 0.35; } }
+@keyframes biz-story-rise { from { opacity: 0; transform: translateY(14px); } }
+@keyframes biz-story-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.biz-story-in   { animation: biz-story-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.biz-story-swap { animation: biz-story-fade 0.35s ease-out both; }
+.biz-story-rise { animation: biz-story-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.05s both; }
+.biz-story-fill { transform-origin: left center; animation-name: biz-story-fill; animation-timing-function: linear; animation-fill-mode: forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .biz-route-fill { animation: none; transition: none; }
+  .biz-bar-truck, .biz-bar-sheen, .biz-live-dot, .biz-bar-swap { animation: none; }
+  .biz-bar-sheen { display: none; }
+  .biz-bento-tile, .biz-bento-in .biz-bento-tile { opacity: 1; animation: none; }
+  .biz-story-in, .biz-story-swap, .biz-story-rise { animation: none; }
+  .biz-map-nudge, .biz-map-text, .biz-pin-body, .biz-pin-dot { animation: none !important; }
+}

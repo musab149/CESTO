@@ -1,0 +1,12 @@
+-- IVA 0 % (user, 2026-11-01): "For iva we will have 0, 4, 10, 21", with 0 %
+-- the default until somebody picks a band.
+--
+-- ADD VALUE ONLY. No row is moved to it and the column default stays on
+-- `reduced`: an API that cannot read `zero` may still be serving while this
+-- lands, and Prisma fails any read that meets an enum value it was not
+-- generated with. Products nobody has picked a band for already carry 0 %
+-- through vat_category_reviewed (effectiveVatCategory in lib/tax).
+--
+-- IF NOT EXISTS, so it is safe to re-run and safe on a database that already
+-- has the value: the 2026-08-31 lesson about enum migrations.
+ALTER TYPE "VatCategory" ADD VALUE IF NOT EXISTS 'zero' BEFORE 'super_reduced';

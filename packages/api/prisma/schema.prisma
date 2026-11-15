@@ -1,0 +1,3656 @@
+generator client {
+  provider        = "prisma-client-js"
+  /**
+   * relationJoins lets a query opt into `relationLoadStrategy: 'join'`, which
+   * resolves nested relations with LATERAL joins in ONE statement instead of
+   * issuing a follow-up SELECT per relation.
+   * This matters here far more than it would on a normal deployment: the API
+   * (Render, virginia) and the database (Neon) are far enough apart that a
+   * single round trip measured ~165-300ms in production. A product listing
+   * pulling category + subcategory + variants + images + store + brand_ref +
+   * origin_ref was therefore paying that latency 8 times for one page of
+   * results. Collapsing to one statement removes ~7 of those round trips.
+   * ⚠ Enabling this flips the DEFAULT strategy to `join` for every query in
+   * the app, not just the ones that opt in — measured, not assumed:
+   * explicit 'query' → 4 statements · explicit 'join' → 1 · default → 1.
+   * That is the intent (the whole catalogue benefits), but it means a Prisma
+   * upgrade that changes this default will change performance everywhere.
+   * Re-run the statement count in packages/api/scripts/bench-catalogue.mjs
+   * after any Prisma version bump.
+   */
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ──────────────────────────────────────────────
+
+enum UserStatus {
+  active
+  blocked
+}
+
+/**
+ * Which price column a user sees + is charged. `retail` is every ordinary
+ * customer and the default. `b2b` is only selectable by users with
+ * is_business=true (approved from a `business`-type B2bLead) and makes the
+ * storefront render ProductVariant.b2b_price, falling back to `price` on
+ * variants with no wholesale price set.
+ * This is deliberately a SERVER-side preference rather than client state:
+ * order totals are recomputed from it at checkout, so a client-only flag
+ * would let anyone self-serve wholesale pricing from devtools.
+ */
+enum PricingMode {
+  retail
+  b2b
+}
+
+enum Language {
+  es
+  en
+}
+
+enum OrderStatus {
+  pending
+  confirmed
+  preparing
+  on_the_way
+  delivered
+  cancelled
+  /**
+   * MV Slice 4 (2026-07-21). Only ever set on a ParentOrder-derived
+   * status (see deriveParentOrderStatus). Never set directly on a
+   * sub-order — subs still resolve to one of the atomic states above.
+   * Meaning: some sub-orders reached a terminal state (delivered /
+   * cancelled) but not all reached the SAME terminal state, so the
+   * parent can't be either "delivered" or "cancelled" as a whole.
+   */
+  partially_completed
+  /**
+   * Draft orders (2026-08-07). Set directly on a sub-order created at
+   * checkout for line items that were out of stock. Stock is NOT
+   * decremented for a draft order's items. Resolved by an explicit
+   * confirm-stock action (re-validates + decrements, moves to
+   * `pending`) or by cancelling it (no restock needed, since nothing
+   * was ever decremented). See lib/draftOrders.ts.
+   */
+  draft
+}
+
+/**
+ * Spanish IVA rate bucket a product is taxed at. The percentage for each
+ * bucket lives only in packages/shared/src/tax.ts (single source of truth)
+ * so a statutory rate change is a one-line edit there, not a migration.
+ */
+/**
+ * Where a product row came from.
+ * `quick_create` is the rep path: a handful of fields typed at a counter, with
+ * review_needed set so a catalogue admin sees it later.
+ */
+enum ProductSource {
+  admin
+  import
+  partner
+  quick_create
+}
+
+/// Which kind of customer a product is shown to (2026-10-25, user request).
+/// `all` (the default) shows it to both, each at their own price — retail for
+/// a B2C shopper, wholesale for a business. `b2c` hides it from business
+/// accounts; `b2b` hides it from everyone else, visitors included. See
+/// lib/audience.ts.
+enum ProductAudience {
+  all
+  b2c
+  b2b
+}
+
+enum VatCategory {
+  zero // 0% — the default until somebody picks a band (user, 2026-11-01)
+  super_reduced // 4% — pan, leche, huevos, frutas, verduras, cereales, queso
+  reduced // 10% — most processed foods, water
+  general // 21% — alcohol, tobacco, non-food/household goods
+}
+
+enum PaymentMethod {
+  cod
+  card
+  bizum
+}
+
+enum VehicleType {
+  moto
+  bicicleta
+  coche
+}
+
+enum AdminRole {
+  super_admin
+  ops
+  catalog
+  /// Reads and downloads the document archive, and reaches nothing else.
+  lawyer
+}
+
+enum NotificationAudience {
+  customer
+  admin
+  /**
+   * A partner's own inbox, on their dashboard bell. `user_id` is the partner
+   * login it is for (one row per login at the shop); `data.store_id` is the
+   * shop, so a login with roles at two shops sees each shop's on its own
+   * dashboard. Kept apart from `customer` so a partner's orders to fulfil
+   * never land in the same bell as their own shopping.
+   */
+  partner
+  /**
+   * A sales rep's own inbox, on the bell in the rep panel (2026-10-26).
+   * `user_id` is the rep. Apart from `customer` for the reason `partner` is.
+   */
+  sales_rep
+}
+
+enum NotificationType {
+  // Customer push (spec Table 21)
+  order_confirmed
+  order_preparing
+  order_on_the_way
+  order_delivered
+  order_cancelled
+  order_edited
+  promo_banner
+  // Admin activity-feed
+  admin_new_order
+  admin_low_stock
+  admin_new_customer
+  admin_subscription_paused
+  admin_broadcast
+  /**
+   * A checkout produced a `draft` sub-order (stock was short).
+   */
+  admin_draft_order
+  /**
+   * A customer submitted a product quotation request (B2bLead type='quotation').
+   */
+  admin_quotation_request
+  /**
+   * A customer edited their own order before dispatch (2026-09-30). Distinct
+   * from `order_edited`, which points the other way — that one tells the
+   * customer an admin or partner changed their order. Whoever is packing has
+   * to learn about this one or they ship the old contents.
+   */
+  admin_order_edited
+  /**
+   * Home Grocery (formerly rashan) request outcomes, to the household that
+   * asked. `rejected` carries the admin's reason in the body — it is written
+   * for the customer to read, same as User.blocked_reason.
+   */
+  home_grocery_approved
+  home_grocery_rejected
+  /**
+   * Somebody submitted the Home Grocery form (a RashanLead). Admin bell.
+   */
+  admin_home_grocery_request
+  /**
+   * Our team built an order for this customer — staff in the panel or a
+   * sales rep. A checkout tells its customer with the receipt; an order made
+   * FOR someone used to tell them nothing until its first status change.
+   */
+  order_placed
+  /**
+   * Partner inbox (audience `partner`). A part of a customer's purchase for
+   * their shop: a new one to fulfil, one waiting on their stock, and one the
+   * customer or Cesto changed or cancelled. Before these, a partner learnt
+   * about an order only by opening the dashboard.
+   */
+  partner_new_order
+  partner_draft_order
+  partner_order_edited
+  partner_order_cancelled
+  /**
+   * Home Grocery plans (2026-10-21). To the household: the next delivery has
+   * been planned (date, and that the list can still change until we start
+   * preparing it). To the admin bell: a household started, paused or resumed
+   * its plan — the deliveries staff prepare depend on it.
+   */
+  home_grocery_delivery_planned
+  admin_home_grocery_plan
+  /** To the household: by its plan's frequency, its next order is due (2026-10-22). */
+  home_grocery_order_due
+  /**
+   * To a sales rep (audience `sales_rep`, 2026-10-26): an admin published a
+   * period of their earnings, or paid it; an order they built was delivered
+   * (it now counts toward their earnings), or cancelled by somebody else.
+   */
+  rep_statement_published
+  rep_statement_paid
+  rep_order_delivered
+  rep_order_cancelled
+  /// An order's earning approved, or approved again with new figures.
+  rep_earning_approved
+  /// An approved order's earning taken back (the order deleted or cancelled).
+  rep_earning_reversed
+  /// A bonus or deduction entered by an admin, or a payout undone.
+  rep_earning_adjusted
+  /// A payment to the rep recorded.
+  rep_payout_recorded
+}
+
+// ─── ADMIN ──────────────────────────────────────────────
+
+model Admin {
+  id                  String    @id @default(uuid()) @db.Uuid
+  name                String
+  email               String    @unique
+  password_hash       String
+  role                AdminRole @default(ops)
+  is_active           Boolean   @default(true)
+  last_login_at       DateTime?
+  password_changed_at DateTime? // null on seeded rows → forced rotate at login time (H2)
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  refresh_tokens                AdminRefreshToken[]
+  web_push_subs                 WebPushSubscription[]
+  import_jobs                   ProductImportJob[]
+  stores_scheduled_for_deletion Store[]               @relation("StoreDeletionScheduler")
+  reviewed_category_submissions Category[]            @relation("CategoryReviewedByAdmin")
+  deleted_orders                Order[]               @relation("OrderDeletionAdmin")
+  created_orders                Order[]               @relation("OrderCreatedByAdmin")
+  order_edit_logs               OrderEditLog[]        @relation("OrderEditAdmin")
+  clients_managed               User[]                @relation("ClientSalesManager")
+  clients_created               User[]                @relation("ClientCreatedByAdmin")
+  sales_reps_granted            SalesRep[]            @relation("SalesRepGrantedBy")
+  rep_profits_set               SalesRepOrderEarning[] @relation("RepProfitSetBy")
+
+  @@index([is_active])
+  @@map("admins")
+}
+
+// ─── USER ───────────────────────────────────────────────
+
+model User {
+  id                     String      @id @default(uuid()) @db.Uuid
+  name                   String
+  phone                  String?     @unique
+  phone_country_code     String?     @default("+34")
+  email                  String?     @unique
+  password_hash          String?
+  google_id              String?     @unique
+  /// Sign in with Apple's stable user identifier (the identity token's `sub`).
+  apple_id               String?     @unique
+  avatar_url             String?
+  preferred_language     Language    @default(es)
+  fcm_token              String?
+  status                 UserStatus  @default(active)
+  /**
+   * Why an admin blocked this account, and when.
+   * The reason is shown to the CUSTOMER — on the login screen and in the
+   * dialog that closes their session — so it is written for them to read,
+   * not as an internal note. Both are cleared on unblock rather than kept as
+   * history: a stale reason displayed after someone is let back in would be
+   * worse than none.
+   */
+  blocked_reason         String?     @db.Text
+  blocked_at             DateTime?
+  /**
+   * True when password_hash was set by an admin (e.g. partner approval)
+   * and the user hasn't rotated to a real one yet. Login response
+   * surfaces this as `must_change_password` so the frontend can force
+   * the change-password screen. Cleared on any successful password
+   * change (change-password or reset-password). Default false so all
+   * existing customer users keep the "not forced" behaviour.
+   */
+  password_is_temp       Boolean     @default(false)
+  /**
+   * True once an admin approves a `business`-type B2bLead for this user.
+   * Gates access to wholesale pricing: b2b_price is stripped from customer
+   * product payloads unless this is true, and pricing_mode can only be set
+   * to `b2b` while it holds. Revoking it silently drops the user back to
+   * retail pricing on their next request.
+   */
+  is_business            Boolean     @default(false)
+  /**
+   * Active price view. Only meaningful when is_business=true — the toggle
+   * endpoint refuses to set `b2b` otherwise, and the order builder treats
+   * a stale `b2b` on a non-business user as `retail`.
+   */
+  pricing_mode           PricingMode @default(retail)
+  /**
+   * The rep who signed this client up, as free text.
+   * Free text because reps do not have their own logins yet — they share
+   * admin accounts and type their name in. `sales_manager_admin_id` below is
+   * the same fact done properly, and is deliberately added now while it is
+   * free: a nullable FK that nothing writes costs one index, whereas adding
+   * the column later means a migration on a table that by then has history.
+   * Read through the FK first and fall back to the text:
+   * sales_manager_admin?.name ?? sales_manager_name
+   */
+  /**
+   * /**
+   * NIF / NIE / CIF. Required on the buyer before a full factura can be
+   * issued to them; a simplified one does not need it.
+   * Deliberately NOT unique. A shared number across two accounts is a
+   * data-quality warning for a human, not a constraint that should 500 a rep
+   * mid-save. Deliberately NOT BusinessProfile.registration_no either: retail
+   * clients have no BusinessProfile at all, and that column is already full
+   * of unvalidated free text from lead forms.
+   */
+  tax_id                 String?
+  /**
+   * Under the RECARGO DE EQUIVALENCIA regime (2026-11-04): a retailer who pays
+   * a surcharge on top of IVA (0,5 / 1,4 / 5,2 % of the same base for 4 / 10
+   * / 21 % IVA). Set by an admin only, off by default — never inferred from
+   * being autónomo or having a NIF. Each order copies it when placed
+   * (Order.recargo_equivalencia), so switching it later moves no order.
+   */
+  recargo_equivalencia   Boolean     @default(false)
+  /**
+   * Legal name for the invoice, when it differs from the display name.
+   */
+  fiscal_name            String?
+  sales_manager_name     String?
+  sales_manager_admin_id String?     @db.Uuid
+  /**
+   * Which admin created this account. Null for self-registered customers.
+   */
+  created_by_admin_id    String?     @db.Uuid
+  /**
+   * Which SALES REP opened this account, if one did.
+   *
+   * A rep is a User, not an Admin — see model SalesRep — so their work cannot
+   * be recorded in `created_by_admin_id`. Both columns exist and at most one
+   * is set: an account was opened by staff, by a rep, or by the person
+   * themselves.
+   */
+  created_by_sales_rep_id String?    @db.Uuid
+  // `browse_postcode` was here. Dropped with the zone system — nothing
+  // filters on location any more, so there is no browse scope to store.
+  created_at             DateTime    @default(now())
+  updated_at             DateTime    @updatedAt
+
+  addresses           Address[]
+  orders              Order[]
+  parent_orders       ParentOrder[]
+  product_reviews     ProductReview[]
+  review_reports      ProductReviewReport[]
+  subscriptions       RashanSubscription[]
+  reset_tokens        PasswordResetToken[]
+  refresh_tokens      UserRefreshToken[]
+  apple_token         AppleToken?
+  notifications       Notification[]
+  web_push_subs       WebPushSubscription[]
+  followed_stores     StoreFollow[]
+  // ─── Unified partner identity (post-Slice-2 rework) ────
+  partner_roles       PartnerStoreRole[]
+  handoff_tokens      AuthHandoffToken[]
+  partner_import_jobs PartnerProductImportJob[]
+  // ─── B2B business identity ────
+  business_profile    BusinessProfile?
+  partner_profile     PartnerProfile?
+  approved_from_leads B2bLead[]                 @relation("B2bLeadApprovedUser")
+  // ─── Home Grocery (rashan) identity ────
+  home_grocery_profile     HomeGroceryProfile?
+  approved_rashan_requests RashanLead[]        @relation("RashanLeadApprovedUser")
+  cart_items          CartItem[]
+  order_edit_logs     OrderEditLog[]            @relation("OrderEditPartnerUser")
+  own_order_edit_logs OrderEditLog[]            @relation("OrderEditCustomer")
+  sales_manager       Admin?                    @relation("ClientSalesManager", fields: [sales_manager_admin_id], references: [id], onDelete: SetNull)
+  created_by_admin    Admin?                    @relation("ClientCreatedByAdmin", fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  invoices            Invoice[]
+  product_discounts   CustomerProductDiscount[]
+  // ─── Sales rep identity ────
+  // Self-relations: a rep is a User, and so is the client they opened.
+  sales_rep_profile    SalesRep? @relation("SalesRepProfile")
+  created_by_sales_rep User?     @relation("ClientCreatedBySalesRep", fields: [created_by_sales_rep_id], references: [id], onDelete: SetNull)
+  clients_opened       User[]    @relation("ClientCreatedBySalesRep")
+  orders_created       Order[]   @relation("OrderCreatedBySalesRep")
+  products_created     Product[] @relation("ProductCreatedBySalesRep")
+  /// Reps who found this account by its email to order for it, without it
+  /// becoming theirs (SalesRepClientLink).
+  found_by_sales_reps  SalesRepClientLink[]
+
+  @@index([status])
+  @@index([created_at])
+  @@index([is_business])
+  @@index([sales_manager_admin_id])
+  @@index([sales_manager_name])
+  @@index([created_by_sales_rep_id])
+  @@index([tax_id])
+  @@map("users")
+}
+
+/**
+ * Server-side cart line. Replaces the in-memory `Map<userId, CartItem[]>`
+ * that used to live in `lib/cartStore.ts`.
+ * Why the server keeps a cart at all: `POST /api/orders` accepts no line
+ * items from the client (see checkoutSchema — address, slot, payment method
+ * and notes only). It builds the order from the server's own copy, so the
+ * client cannot dictate quantities or prices. The quote endpoint prices the
+ * same copy.
+ * Why it moved to Postgres: the Map was process memory, so every deploy,
+ * crash or dev-server reload silently emptied every shopper's cart — and it
+ * could never be shared across API instances, which quietly capped the API
+ * at one. Durable rows also make abandoned-cart follow-up possible later.
+ * One row per (user, variant). Both FKs cascade, so deleting a product,
+ * variant or user takes its cart lines with it and no stale rows survive.
+ */
+model CartItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  user_id    String   @db.Uuid
+  product_id String   @db.Uuid
+  variant_id String   @db.Uuid
+  quantity   Int
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user    User           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, variant_id])
+  @@index([user_id])
+  @@map("cart_items")
+}
+
+/**
+ * Trading details for an approved B2B business customer, snapshotted from
+ * the `business`-type B2bLead at approval time and editable afterwards from
+ * the customer's own profile page.
+ * Deliberately a separate table rather than columns on User: only a small
+ * fraction of users are businesses, the field set will grow (VAT ID, credit
+ * terms, payment settlement), and the data must outlive archival of the
+ * originating lead.
+ */
+model BusinessProfile {
+  id      String @id @default(uuid()) @db.Uuid
+  user_id String @unique @db.Uuid
+
+  company         String
+  business_type   String?
+  location        String?
+  website         String?
+  registration_no String?
+  /**
+   * Trading contact — may differ from User.phone, which is the login /
+   * delivery contact. Snapshotted from the lead's phone at approval.
+   */
+  contact_phone   String?
+
+  /**
+   * Which lead this profile was created from. SetNull so purging a lead
+   * leaves the business account intact (the whole point of a separate
+   * table).
+   */
+  source_lead_id       String?  @db.Uuid
+  approved_at          DateTime @default(now())
+  approved_by_admin_id String?  @db.Uuid
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  source_lead B2bLead? @relation("BusinessProfileSourceLead", fields: [source_lead_id], references: [id], onDelete: SetNull)
+
+  @@index([company])
+  @@map("business_profiles")
+}
+
+/// The application a partner submitted, kept after approval.
+///
+/// Approving a partner_store lead used to discard everything the applicant
+/// typed — company, trading location, registration number — because the only
+/// thing carried forward was the Store row. That left support with no record
+/// of who they onboarded beyond a store name, and the partner with no way to
+/// see what they had submitted.
+///
+/// Deliberately NOT BusinessProfile, despite the identical columns.
+/// BusinessProfile marks a wholesale BUYER: `/api/users/me` returns it as
+/// `business_profile` and the storefront renders it as a B2B account panel.
+/// A partner is a seller. Sharing the table would surface partners as
+/// business accounts and entangle two unrelated approval paths.
+model PartnerProfile {
+  id      String @id @default(uuid()) @db.Uuid
+  user_id String @unique @db.Uuid
+
+  company         String
+  business_type   String?
+  location        String?
+  website         String?
+  registration_no String?
+  /// Trading contact from the application. May differ from User.phone, which
+  /// is the login/delivery contact.
+  contact_phone   String?
+
+  /// SetNull so purging a lead leaves the partner's account and profile
+  /// intact — the same reasoning as BusinessProfile.source_lead_id.
+  source_lead_id  String? @db.Uuid
+  /// Which store the application was resolved onto. SetNull rather than
+  /// Cascade: if the store is deleted the application record should survive,
+  /// because it is evidence of who was onboarded and when.
+  linked_store_id String? @db.Uuid
+  /// True when the store was an existing admin-created one rather than
+  /// created by the approval. Kept because the two are operationally
+  /// different — a linked store may already have had products and orders.
+  linked_existing Boolean @default(false)
+
+  approved_at          DateTime @default(now())
+  approved_by_admin_id String?  @db.Uuid
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  source_lead  B2bLead? @relation("PartnerProfileSourceLead", fields: [source_lead_id], references: [id], onDelete: SetNull)
+  linked_store Store?   @relation("PartnerProfileLinkedStore", fields: [linked_store_id], references: [id], onDelete: SetNull)
+
+  @@index([company])
+  @@index([linked_store_id])
+  @@map("partner_profiles")
+}
+
+// ─── WEB PUSH ───────────────────────────────────────────
+// One row per (user, browser). `endpoint` is globally unique in the
+// Web Push spec — reusing it upserts the subscription. Deleted on
+// 410 Gone from the push service (browser unsubscribed).
+
+// One row per (user | admin) × (browser installation). Exactly one of
+// user_id / admin_id is set — checked at the app layer, not by a DB
+// constraint (Prisma does not model check constraints). endpoint is
+// globally unique because it identifies a specific browser install.
+model WebPushSubscription {
+  id         String   @id @default(uuid()) @db.Uuid
+  user_id    String?  @db.Uuid
+  admin_id   String?  @db.Uuid
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  user_agent String?
+  created_at DateTime @default(now())
+
+  user  User?  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  admin Admin? @relation(fields: [admin_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([admin_id])
+  @@map("web_push_subscriptions")
+}
+
+// ─── PASSWORD RESET ─────────────────────────────────────
+
+model PasswordResetToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime
+  used_at    DateTime?
+  created_at DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([expires_at])
+  @@map("password_reset_tokens")
+}
+
+// ─── REFRESH TOKENS ─────────────────────────────────────
+// Opaque refresh tokens stored SHA-256'd. On refresh we rotate: old row is
+// marked revoked and a new row is issued. If a client presents a token that
+// is already revoked, that's a reuse-attack signal — we nuke ALL of that
+// subject's live tokens and force re-authentication.
+
+model UserRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([expires_at])
+  @@map("user_refresh_tokens")
+}
+
+/// Apple's refresh token for a customer who signed in with Apple — kept for
+/// one purpose: revoking it when they delete their account, which App Review
+/// guideline 5.1.1(v) requires of apps offering Sign in with Apple. Its own
+/// table rather than a users column so no query that returns a user row can
+/// carry it out of the API.
+model AppleToken {
+  user_id       String   @id @db.Uuid
+  refresh_token String
+  /// The bundle id the token was issued to — revoking must name the same one.
+  client_id     String
+  updated_at    DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("apple_tokens")
+}
+
+model AdminRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  admin_id   String    @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now())
+
+  admin Admin @relation(fields: [admin_id], references: [id], onDelete: Cascade)
+
+  @@index([admin_id])
+  @@index([expires_at])
+  @@map("admin_refresh_tokens")
+}
+
+// ─── ADDRESS ────────────────────────────────────────────
+
+/**
+ * A Spanish delivery address.
+ * Deliberately has no serviceability link. Addresses used to carry a
+ * `zone_id` FK to the delivery zone covering their postcode, and checkout
+ * refused any address that resolved to none — a customer could save an
+ * address the platform then declined to deliver to. Coverage is no longer
+ * modelled: every live store ships everywhere, so an address is simply
+ * somewhere to send an order.
+ */
+model Address {
+  id             String  @id @default(uuid()) @db.Uuid
+  user_id        String  @db.Uuid
+  contact_name   String
+  contact_phone  String
+  street_line_1  String
+  street_line_2  String?
+  postcode       String  @db.VarChar(5)
+  city           String
+  province       String
+  delivery_notes String? @db.VarChar(200)
+  is_default     Boolean @default(false)
+
+  /**
+   * Geocoded position of this address, used only to price delivery by
+   * distance (AppSetting["store"].deliveryBands). Float rather than Decimal
+   * on purpose: unlike money, six-decimal coordinates feed a haversine that
+   * is already an approximation, so exact decimal arithmetic buys nothing.
+   * Nullable and expected to be null. An address saved before this landed,
+   * one the geocoder could not resolve, and one saved while GOOGLE_MAPS_KEY
+   * is unset all have no coordinates — delivery then falls back to the flat
+   * fee. Nothing else in the app reads these, so a null is a pricing
+   * fallback, never a broken address.
+   */
+  latitude  Float?
+  longitude Float?
+
+  /**
+   * When the coordinates above were last resolved, and when a resolve last
+   * failed. The failure stamp exists so the lazy backfill at quote time
+   * (see routes/orders.ts) does not re-hit Google on every checkout for an
+   * address the geocoder has already refused — one attempt per
+   * GEOCODE_RETRY_AFTER window, then the flat fee.
+   */
+  geocoded_at       DateTime?
+  geocode_failed_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user          User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  orders        Order[]
+  parent_orders ParentOrder[]
+  subscriptions RashanSubscription[]
+
+  @@index([user_id])
+  @@index([postcode])
+  @@map("addresses")
+}
+
+// ─── CATEGORY ───────────────────────────────────────────
+
+// Provenance + moderation state for a Category. `approved` is the default so
+// every pre-existing (admin-created) row behaves exactly as before — this
+// axis only starts mattering once a partner submits one. See
+// docs/MULTIVENDOR_ROADMAP.md Ground Rule 9 (partner category submissions).
+enum CategoryApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+model Category {
+  id                      String                 @id @default(uuid()) @db.Uuid
+  name_es                 String
+  name_en                 String
+  icon_url                String?
+  /**
+   * Card background — drives the Shop by Origin-style tile on the home page.
+   */
+  bg_color                String?                @db.VarChar(9)
+  /**
+   * Card accent — used for the silhouette/initial fallback and small chrome.
+   */
+  accent_color            String?                @db.VarChar(9)
+  sort_order              Int                    @default(0)
+  is_active               Boolean                @default(true)
+  /**
+   * 'admin' = created in the Cesto admin panel. 'partner' = submitted by a
+   * vendor from their dashboard. Same convention as Brand.source /
+   * Origin.source / ProductType.source.
+   */
+  source                  String                 @default("admin")
+  /**
+   * Moderation state. Partner submissions start `pending` and are excluded
+   * from every public/partner-picker read until an admin approves them.
+   * Admin-created categories default straight to `approved`.
+   */
+  approval_status         CategoryApprovalStatus @default(approved)
+  /**
+   * Store that submitted this category, when source = 'partner'.
+   */
+  submitted_by_store_id   String?                @db.Uuid
+  /**
+   * User (partner) who submitted this category, when source = 'partner'.
+   */
+  submitted_by_user_id    String?                @db.Uuid
+  /**
+   * Set on reject; shown back to the submitting partner.
+   */
+  rejection_reason        String?                @db.Text
+  reviewed_at             DateTime?
+  reviewed_by_admin_id    String?                @db.Uuid
+  /**
+   * Set when the submitting partner clears this submission from their "My
+   * category requests" list (after seeing it approved or rejected). Purely
+   * a per-submission read-state flag — never affects the Category itself,
+   * which stays live/approved regardless.
+   */
+  submission_dismissed_at DateTime?
+  created_at              DateTime               @default(now())
+  updated_at              DateTime               @updatedAt
+
+  subcategories      SubCategory[]
+  products           Product[]
+  submitted_by_store Store?        @relation("CategoryPartnerSubmission", fields: [submitted_by_store_id], references: [id], onDelete: SetNull)
+  reviewed_by_admin  Admin?        @relation("CategoryReviewedByAdmin", fields: [reviewed_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@index([is_active])
+  @@index([approval_status])
+  @@map("categories")
+}
+
+// ─── PENDING CATEGORY ──────────────────────────────────
+// Names surfaced by the bulk-import flow that don't yet match any Category.
+// Admin promotes one of these to a real Category from the Categories page;
+// the matching row is then auto-cleared.
+model PendingCategory {
+  id               String   @id @default(uuid()) @db.Uuid
+  name             String   @unique
+  source_row_count Int      @default(1)
+  first_seen_at    DateTime @default(now())
+  last_seen_at     DateTime @updatedAt
+
+  @@map("pending_categories")
+}
+
+// ─── PENDING PRODUCT ───────────────────────────────────
+// Full product payload parked during a bulk import because the referenced
+// category didn't exist yet. Lives here until the matching Category is
+// created — at which point the admin reviews and publishes them into real
+// Products from the Categories page.
+model PendingProduct {
+  id                   String   @id @default(uuid()) @db.Uuid
+  /**
+   * Lower-cased category name from the upload — used to find rows once the
+   * real Category is created (matches against name_es/name_en).
+   */
+  category_name_key    String
+  /**
+   * Original casing of the category name, for display in the UI.
+   */
+  category_name_raw    String
+  /**
+   * Original subcategory name from the upload, if any. Resolved against the
+   * real Category's subcategories at publish time.
+   */
+  subcategory_name_raw String?
+  product_key          String
+  name_es              String
+  name_en              String
+  description_es       String?  @db.Text
+  description_en       String?  @db.Text
+  brand                String?
+  origin               String?
+  /**
+   * Shop slug carried over from the import. Null on publish maps to Cesto.
+   */
+  shop_id              String?
+  is_active            Boolean  @default(true)
+  is_featured          Boolean  @default(false)
+  /**
+   * [{ name_es, name_en, price, compare_at_price, stock_quantity,
+   * low_stock_threshold, sku, is_default, is_active }]
+   */
+  variants             Json
+  /**
+   * string[] — image URLs in the same order they came in from the sheet.
+   */
+  image_urls           Json     @default("[]")
+  source_row_number    Int
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@index([category_name_key])
+  @@map("pending_products")
+}
+
+// ─── SUBCATEGORY ────────────────────────────────────────
+
+model SubCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  category_id String   @db.Uuid
+  name_es     String
+  name_en     String
+  sort_order  Int      @default(0)
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  category      Category      @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  products      Product[]
+  product_types ProductType[]
+
+  @@index([category_id])
+  @@map("subcategories")
+}
+
+// ─── PRODUCT TYPE ───────────────────────────────────────
+// Third tier of the catalogue taxonomy (2026-07-17). Sits under SubCategory
+// so customers can drill Category → SubCategory → ProductType before
+// landing on products. Optional on Product — legacy rows have
+// product_type_id = NULL and stay parked under just their subcategory.
+//
+// On delete: `Product.product_type_id` uses ON DELETE SET NULL so deleting
+// a product type leaves its products cleanly tied to their subcategory
+// (no orphaned catalogue rows, no lost product data).
+
+model ProductType {
+  id             String   @id @default(uuid()) @db.Uuid
+  subcategory_id String   @db.Uuid
+  name_es        String
+  name_en        String
+  sort_order     Int      @default(0)
+  is_active      Boolean  @default(true)
+  /**
+   * How this row landed in the DB. 'manual' = admin created it in the
+   * Categories page. 'import' = Excel importer auto-parked it as
+   * is_active=false pending admin review. Same convention as
+   * Brand.source / Origin.source / Store.source.
+   */
+  source         String   @default("manual")
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  subcategory SubCategory @relation(fields: [subcategory_id], references: [id], onDelete: Cascade)
+  products    Product[]
+
+  @@index([subcategory_id])
+  @@index([is_active])
+  @@index([source, is_active])
+  @@map("product_types")
+}
+
+// ─── PRODUCT ────────────────────────────────────────────
+
+model Product {
+  id                    String        @id @default(uuid()) @db.Uuid
+  name_es               String
+  name_en               String
+  description_es        String?       @db.Text
+  description_en        String?       @db.Text
+  /**
+   * Free-text brand string. Legacy field, kept in sync with brand_ref.name
+   * as a denormalised fallback for older API deploys. New code should read
+   * brand_ref instead.
+   */
+  brand                 String?
+  /**
+   * Free-text origin string. Same story as brand — legacy denormalised copy.
+   */
+  origin                String?
+  /**
+   * FK to the canonical Brand row (2026-07-13). Null when brand is unknown/blank.
+   */
+  brand_id              String?       @db.Uuid
+  /**
+   * FK to the canonical Origin row (2026-07-13). Null when origin is unknown/blank.
+   */
+  origin_id             String?       @db.Uuid
+  /**
+   * FK to a Store row. Null = Cesto (the default house shop).
+   */
+  store_id              String?       @db.Uuid
+  category_id           String        @db.Uuid
+  subcategory_id        String?       @db.Uuid
+  /**
+   * Third-tier taxonomy (2026-07-17). Optional — legacy products keep
+   * NULL and stay tied to just their subcategory. See ProductType.
+   */
+  product_type_id       String?       @db.Uuid
+  is_active             Boolean       @default(true)
+  is_featured           Boolean       @default(false)
+  is_verified           Boolean       @default(false)
+  is_top_seller         Boolean       @default(false)
+  /**
+   * Admin-curated paid placement. Surfaces the product in the home
+   * "Sponsored picks" rail and on /categories?sponsored=1.
+   */
+  is_sponsored          Boolean       @default(false)
+  /**
+   * Admin-curated "New products" rail on the home page. Deliberately a flag
+   * rather than a created_at window: the rail used to show whatever was most
+   * recently inserted, so a bulk import or a routine catalogue edit rewrote
+   * the shop front by accident. Opting in is the admin's call.
+   */
+  is_new_arrival        Boolean       @default(false)
+  /**
+   * Admin-curated. When true, the storefront shows a "Request quotation"
+   * button on the product detail page, for bulk/wholesale items priced
+   * case-by-case.
+   */
+  is_quotation_enabled  Boolean       @default(false)
+  /** Who sees it in the shop and the app: both kinds of customer, B2C only or B2B only. */
+  audience              ProductAudience @default(all)
+  rating                Float?
+  rating_count          Int           @default(0)
+  /**
+   * Spanish IVA bucket for this product. Since 2026-11-01 its prices are
+   * stored WITHOUT IVA and customers are shown and charged them with it
+   * (lib/pricing), so this decides what people pay.
+   *
+   * IGNORED UNTIL vat_category_reviewed: a product nobody has picked a band
+   * for carries 0 % (effectiveVatCategory in lib/tax), whatever this says.
+   * The `reduced` default is a legacy placeholder. It is not moved to `zero`,
+   * nor are the rows, because an API that cannot read `zero` may still be
+   * serving while a deploy's migration lands, and every product read it made
+   * would fail. Switch the default once every environment knows `zero`.
+   */
+  vat_category          VatCategory   @default(reduced)
+  /**
+   * True once somebody has chosen vat_category: the product form, the bulk
+   * grid, "Set IVA", quick-create, or an IVA value in an imported sheet.
+   * Never set by a migration backfill, and not by a sheet that leaves the
+   * IVA column blank. Until it is true the product carries 0 %.
+   */
+  vat_category_reviewed Boolean       @default(false)
+  /**
+   * How this product got here. Pays for itself the first time somebody asks
+   * how a batch of junk entered the catalogue.
+   */
+  created_source        ProductSource @default(admin)
+  created_by_admin_id   String?       @db.Uuid
+  /**
+   * The rep who quick-created it, when a rep did.
+   *
+   * Same two-column arrangement as Order and User, and for the same reason: a
+   * rep is a User, not an Admin, so they cannot be recorded in
+   * `created_by_admin_id`. At most one is ever set.
+   *
+   * It matters more here than anywhere else. A quick-created row is the
+   * lowest-quality data in the catalogue by design — twenty seconds at a
+   * counter — and the person working the review queue needs to know who to
+   * ask about a line that makes no sense.
+   */
+  created_by_sales_rep_id String?     @db.Uuid
+  /**
+   * Flagged for a proper look later.
+   * A separate boolean rather than `created_source = quick_create`, because
+   * this must be CLEARABLE while the provenance stays. Deliberately not
+   * `is_verified`, whose meaning is a customer-facing trust badge — reusing
+   * it would put a half-described product's status on the storefront.
+   * Cleared by an explicit "Mark as reviewed" action, never as a side-effect
+   * of saving: an admin fixing an unrelated typo should not silently drain
+   * the queue.
+   */
+  review_needed         Boolean       @default(false)
+  created_at            DateTime      @default(now())
+  updated_at            DateTime      @updatedAt
+
+  category                         Category                        @relation(fields: [category_id], references: [id])
+  subcategory                      SubCategory?                    @relation(fields: [subcategory_id], references: [id])
+  product_type                     ProductType?                    @relation(fields: [product_type_id], references: [id], onDelete: SetNull)
+  store                            Store?                          @relation(fields: [store_id], references: [id])
+  created_by_sales_rep             User?                           @relation("ProductCreatedBySalesRep", fields: [created_by_sales_rep_id], references: [id], onDelete: SetNull)
+  brand_ref                        Brand?                          @relation(fields: [brand_id], references: [id], onDelete: SetNull)
+  origin_ref                       Origin?                         @relation(fields: [origin_id], references: [id], onDelete: SetNull)
+  variants                         ProductVariant[]
+  images                           ProductImage[]
+  order_items                      OrderItem[]
+  customer_discounts               CustomerProductDiscount[]
+  /**
+   * Pending Excel-import duplicates that matched this product. Named
+   * relation because ProductImportDuplicate might grow additional FKs to
+   * Product later (e.g. `created_product_id` after Create Anyway).
+   */
+  import_duplicate_matches         ProductImportDuplicate[]        @relation("import_duplicate_matches")
+  partner_import_duplicate_matches PartnerProductImportDuplicate[] @relation("partner_import_duplicate_matches")
+  cart_items                       CartItem[]
+  reviews                          ProductReview[]
+  /// The sales reps it is assigned to by hand, beyond their shops (lib/repStore).
+  rep_assignments                  SalesRepProduct[]
+
+  @@index([category_id])
+  @@index([review_needed])
+  @@index([created_by_sales_rep_id])
+  @@index([subcategory_id])
+  @@index([product_type_id])
+  @@index([is_active])
+  @@index([is_featured])
+  @@index([is_top_seller])
+  @@index([is_sponsored])
+  @@index([is_new_arrival])
+  @@index([is_quotation_enabled])
+  @@index([store_id])
+  @@index([brand_id])
+  @@index([origin_id])
+  @@index([created_at])
+  @@index([vat_category_reviewed])
+  @@map("products")
+}
+
+// ─── PRODUCT VARIANT ────────────────────────────────────
+
+model ProductVariant {
+  id                  String   @id @default(uuid()) @db.Uuid
+  product_id          String   @db.Uuid
+  name_es             String
+  name_en             String
+  /**
+   * B2C / retail price. Charged to regular customer accounts.
+   */
+  price               Decimal  @db.Decimal(10, 2)
+  /**
+   * Strike-through / promo price for the B2C surface.
+   */
+  compare_at_price    Decimal? @db.Decimal(10, 2)
+  /**
+   * B2B / wholesale price. Only surfaced to customers with a B2B role
+   * (approved through the b2b-deals flow). Null = no B2B pricing set.
+   */
+  b2b_price           Decimal? @db.Decimal(10, 2)
+  /**
+   * What Cesto pays for one unit — the buying price (2026-10-27, user: "we
+   * need to add the buying price for all the products... set the buying
+   * price to 0 by default... It will also show in the products table to
+   * admin but it wont show to the sales rep"). 0 = not entered yet.
+   *
+   * ADMIN ONLY. Left out of every query by the client's global `omit`
+   * (lib/prisma); only the admin product routes ask for it back, so no shop,
+   * rep or partner payload can carry it by accident.
+   */
+  cost_price          Decimal  @default(0) @db.Decimal(10, 2)
+  stock_quantity      Int      @default(0)
+  low_stock_threshold Int      @default(10)
+  is_default          Boolean  @default(false)
+  is_active           Boolean  @default(true)
+  sku                 String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  product            Product                   @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  order_items        OrderItem[]
+  cart_items         CartItem[]
+  customer_discounts CustomerProductDiscount[]
+
+  @@index([product_id])
+  @@map("product_variants")
+}
+
+// ─── PRODUCT IMAGE ──────────────────────────────────────
+
+model ProductImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  product_id String   @db.Uuid
+  url        String
+  alt_text   String?
+  sort_order Int      @default(0)
+  is_primary Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  product Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
+
+  @@index([product_id])
+  @@map("product_images")
+}
+
+// ─── ORDER ──────────────────────────────────────────────
+
+model Order {
+  id                  String        @id @default(uuid()) @db.Uuid
+  order_number        String        @unique
+  user_id             String        @db.Uuid
+  address_id          String        @db.Uuid
+  address_snapshot    Json
+  // `delivery_slot_id` was here. Booked windows went with the zone system —
+  // every order is ASAP and routed by ops.
+  payment_method      PaymentMethod @default(cod)
+  subtotal            Decimal       @db.Decimal(10, 2)
+  delivery_fee        Decimal       @db.Decimal(10, 2)
+  total               Decimal       @db.Decimal(10, 2)
+  /**
+   * The customer was under recargo de equivalencia when this was placed
+   * (User.recargo_equivalencia, copied). Decides whether `recargo` is charged
+   * — on this order, or on its purchase when it is part of one.
+   */
+  recargo_equivalencia Boolean     @default(false)
+  /**
+   * The recargo charged, on the same taxable base as IVA, rate by rate, the
+   * delivery fee included (lib/orderTotals recargoFor). `total` = subtotal +
+   * delivery_fee + recargo. Always 0 on a part of a split purchase: the
+   * purchase is charged it once, on the whole (ParentOrder.recargo), exactly
+   * as its one factura computes it.
+   */
+  recargo             Decimal       @default(0) @db.Decimal(10, 2)
+  /**
+   * IVA breakdown snapshot for THIS order's own line items (see
+   * packages/shared/src/tax.ts computeTaxBreakdown). Informational only —
+   * total above is unchanged, prices are already tax-inclusive. Array of
+   * { vat_category, rate_pct, taxable_base, tax_amount }. Delivery fee is
+   * intentionally excluded (MVP simplification) — which is also why pricing
+   * delivery by distance does not touch any of this.
+   */
+  tax_breakdown       Json          @default("[]")
+  tax_total           Decimal       @default(0) @db.Decimal(10, 2)
+  status              OrderStatus   @default(pending)
+  rider_id            String?       @db.Uuid
+  customer_notes      String?       @db.Text
+  admin_notes         String?       @db.Text
+  cancelled_reason    String?       @db.Text
+  /**
+   * MV Slice 4 (2026-07-21). Non-null when this Order is a sub-order of a
+   * cross-store checkout — the customer paid once for the ParentOrder and
+   * each store fulfils its own sub-Order independently. Single-store
+   * checkouts (including the pre-mv era) leave this null. Tightened to
+   * NOT NULL never — a single-store order legitimately has no parent.
+   */
+  parent_order_id     String?       @db.Uuid
+  /**
+   * MV Slice 4 (2026-07-21). Nullable = "Cesto house store" (matches the
+   * Product.store_id convention). When flag on, checkout populates this
+   * for every new order (sub-orders inherit their group's store_id, single
+   * Cesto-only orders keep null). Pre-mv rows keep null. Slice 7 backfills
+   * null → cesto Store id, then tightens to NOT NULL.
+   */
+  store_id            String?       @db.Uuid
+  /**
+   * The admin who built this order, for a rep-created one. Null for every
+   * customer checkout.
+   * Not just attribution. A rep-created order is Cesto-fulfilled by
+   * definition — the rep delivers it — so it keeps `store_id` null even when
+   * it holds partner products. That collides with the legacy partner
+   * visibility clause in routes/partner/orders.ts, which reads "store_id null
+   * plus a matching item" as a pre-mv row belonging to that partner. This
+   * column tells the two nulls apart: a pre-mv checkout has no admin creator.
+   */
+  created_by_admin_id String?       @db.Uuid
+  /**
+   * The SALES REP who built this order, if a rep did.
+   *
+   * A rep is a User (see model SalesRep), so their orders cannot be recorded
+   * in `created_by_admin_id`. "Built for a customer rather than by one" is
+   * therefore either column being set, which is what the order books ask.
+   */
+  created_by_sales_rep_id String?   @db.Uuid
+  /**
+   * Whether the buyer was a wholesale account WHEN THIS ORDER WAS PLACED.
+   *
+   * The admin order books split on this, and reading it live off the user
+   * meant changing someone's account type retroactively moved every order
+   * they had ever placed between books and rewrote past revenue splits. An
+   * order is a historical fact; the account it belongs to is not.
+   *
+   * Null = placed before this column existed and never backfilled, which the
+   * filters resolve by falling back to the user's current type. Set on every
+   * create path from 2026-10-05.
+   */
+  buyer_is_business   Boolean?
+
+  /**
+   * Soft-delete tombstone (2026-08-15). Set by an admin to hide a test/
+   * mistaken order from lists, the customer's own order history, and
+   * dashboard aggregates — WITHOUT actually removing the row. `status` is
+   * left untouched so the order's real history stays intact for anyone
+   * who looks it up directly; every list/aggregate query just adds
+   * `deleted_at: null`. Mirrors Store's deleted_at/deletion_reason/
+   * deletion_scheduled_by_admin_id tombstone shape.
+   */
+  deleted_at          DateTime?
+  deleted_by_admin_id String?       @db.Uuid
+  delete_reason       String?       @db.Text
+  /**
+   * A Home Grocery order (2026-10-21; reshaped 2026-10-22). Set on every
+   * order placed for an approved household's plan — by the household from
+   * its plan page, by staff, or by a rep. The plan itself is only delivery
+   * settings; it makes no orders of its own any more (see
+   * lib/homeGroceryPlan.ts). Orders the plan made ahead as drafts before
+   * that change keep this link too.
+   *
+   * The one-live-order-per-plan-per-date index that made those drafts safe
+   * was dropped in 20261022120000_home_grocery_orders: a household placing
+   * its own orders may well place two for the same day.
+   */
+  rashan_subscription_id String?    @db.Uuid
+  /** The day the order is to be delivered (Spanish calendar date) — its slot. */
+  scheduled_for       DateTime?     @db.Date
+  /** The part of that day it is for. Null = any time. */
+  delivery_window     DeliveryWindow?
+  /**
+   * When it was marked delivered (2026-10-26) — by staff or by the shop. A
+   * sales rep's earnings count the orders delivered in a period (lib/
+   * repEarnings), and a past period must not change when an older order is
+   * delivered late. Orders delivered before this existed carry their last
+   * update, the closest record there is.
+   */
+  delivered_at        DateTime?
+  created_at          DateTime      @default(now())
+  updated_at          DateTime      @updatedAt
+
+  user                  User                  @relation(fields: [user_id], references: [id])
+  address               Address               @relation(fields: [address_id], references: [id])
+  rider                 Rider?                @relation(fields: [rider_id], references: [id])
+  parent_order          ParentOrder?          @relation(fields: [parent_order_id], references: [id], onDelete: Cascade)
+  store                 Store?                @relation(fields: [store_id], references: [id], onDelete: Restrict)
+  deleted_by            Admin?                @relation("OrderDeletionAdmin", fields: [deleted_by_admin_id], references: [id], onDelete: SetNull)
+  created_by_admin      Admin?                @relation("OrderCreatedByAdmin", fields: [created_by_admin_id], references: [id], onDelete: SetNull)
+  created_by_sales_rep  User?                 @relation("OrderCreatedBySalesRep", fields: [created_by_sales_rep_id], references: [id], onDelete: SetNull)
+  items                 OrderItem[]
+  edit_logs             OrderEditLog[]
+  subscription_delivery SubscriptionDelivery?
+  invoices              Invoice[]
+  customer_discounts_set CustomerProductDiscount[]
+  /**
+   * SetNull: ending or deleting a plan must not take the orders it made with
+   * it — they are the household's delivery history.
+   */
+  rashan_subscription   RashanSubscription?   @relation("PlanOrders", fields: [rashan_subscription_id], references: [id], onDelete: SetNull)
+  /// What the rep who built it earns from it (2026-10-28, lib/repEarnings).
+  /// No row until an admin enters its expenses or a % of its own, or approves it.
+  rep_earning           SalesRepOrderEarning?
+  rep_ledger_entries    SalesRepLedgerEntry[]
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+  @@index([order_number])
+  @@index([rashan_subscription_id])
+  @@index([parent_order_id])
+  @@index([store_id, status])
+  @@index([deleted_at])
+  @@index([created_by_admin_id])
+  @@index([created_by_sales_rep_id])
+  @@index([buyer_is_business])
+  @@map("orders")
+}
+
+// ─── PARENT ORDER (MV Slice 4) ──────────────────────────
+// Groups N sub-Orders created by one cross-store checkout so the customer
+// sees a single order number, single payment, single receipt — even though
+// each store fulfils its own slice. No `status` column: the whole-order
+// state is a pure function of the sub-orders (see deriveParentOrderStatus).
+//
+// Rollback: `MV_ORDER_SPLIT=false` → checkout never creates ParentOrder rows.
+// Existing rows stay queryable but unreachable from checkout until re-enabled.
+
+model ParentOrder {
+  id                 String        @id @default(uuid()) @db.Uuid
+  order_number       String        @unique
+  user_id            String        @db.Uuid
+  address_id         String        @db.Uuid
+  address_snapshot   Json
+  payment_method     PaymentMethod @default(cod)
+  subtotal           Decimal       @db.Decimal(10, 2)
+  /**
+   * Sum of all sub-order delivery fees. Slice 4 keeps this simple: the
+   * full computed fee lives on the parent and every sub carries 0. Slice 5
+   * switches to per-store fees where each sub owns its slice.
+   */
+  delivery_fee_total Decimal       @db.Decimal(10, 2)
+  total              Decimal       @db.Decimal(10, 2)
+  /** As Order.recargo_equivalencia, for the whole purchase. */
+  recargo_equivalencia Boolean     @default(false)
+  /**
+   * The recargo on the whole purchase — every live part's lines and the
+   * purchase's delivery fee. `total` = the parts' totals + delivery_fee_total
+   * + recargo; the parts carry none of it.
+   */
+  recargo            Decimal       @default(0) @db.Decimal(10, 2)
+  /**
+   * IVA breakdown across ALL sub-orders — the single-receipt aggregate the
+   * customer sees. See Order.tax_breakdown for the shape and the same
+   * delivery-fee-excluded caveat.
+   */
+  tax_breakdown      Json          @default("[]")
+  tax_total          Decimal       @default(0) @db.Decimal(10, 2)
+  customer_notes     String?       @db.Text
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @updatedAt
+
+  user       User    @relation(fields: [user_id], references: [id])
+  address    Address @relation(fields: [address_id], references: [id])
+  sub_orders Order[]
+  /** The albarán / factura covering the whole purchase. */
+  invoices   Invoice[]
+
+  @@index([user_id])
+  @@index([created_at])
+  @@index([order_number])
+  @@map("parent_orders")
+}
+
+// ─── ORDER ITEM ─────────────────────────────────────────
+
+model OrderItem {
+  id               String       @id @default(uuid()) @db.Uuid
+  order_id         String       @db.Uuid
+  product_id       String       @db.Uuid
+  variant_id       String       @db.Uuid
+  product_snapshot Json
+  quantity         Int
+  unit_price       Decimal      @db.Decimal(10, 2)
+  /**
+   * A flat amount off this line, in euros — not a percentage, and not per
+   * unit. A rep knocking 2 EUR off a case knocks 2 EUR off whatever the case
+   * costs, so changing the quantity afterwards does not scale it.
+   *
+   * `line_total` is always (unit_price * quantity) MINUS this, so every
+   * subtotal, total and invoice VAT figure already accounts for it without
+   * knowing it exists: invoicing.ts reads line_total as the gross it taxes.
+   *
+   * Null rather than 0 for the untouched case, so "never discounted" and
+   * "discounted by nothing" stay distinguishable in the edit log.
+   */
+  discount_amount  Decimal?     @db.Decimal(10, 2)
+  /**
+   * Euros off ONE unit (2026-10-25, user decision): a €4 product with a €2
+   * discount costs €2 each, whatever the quantity. When set,
+   * `discount_amount` is this times the quantity and is rewritten whenever
+   * the quantity changes, so line_total — and every total and invoice that
+   * reads it — keeps working unchanged.
+   *
+   * Null on a line with no discount — and on a line discounted before
+   * per-unit discounts, whose flat `discount_amount` is read as euros off one
+   * unit (to the cent) the first time it changes; see unitDiscountOf() in
+   * lib/orderTotals. Nothing is backfilled: old orders keep their figures.
+   */
+  unit_discount    Decimal?     @db.Decimal(10, 2)
+  line_total       Decimal      @db.Decimal(10, 2)
+  /**
+   * What Cesto paid for ONE unit on THIS order — the line's buying price
+   * (2026-10-27, user: "on each order we should be able to edit the buying
+   * price... It will be done by the admin and not the reps").
+   *
+   * Copied from the size's `ProductVariant.cost_price` when the line is made
+   * (and when an edit swaps the size); after that it belongs to the order:
+   * the admin corrects it here without touching the product, and a later
+   * change to the product leaves this order alone. 0 = not entered.
+   *
+   * ADMIN ONLY, like cost_price: omitted from every read by lib/prisma.
+   */
+  unit_cost        Decimal      @default(0) @db.Decimal(10, 2)
+  /**
+   * IVA snapshot for this line. `tax_rate_pct` is the rate its unit_price was
+   * charged with, written when the line is made (lib/pricing lineVatSnapshot)
+   * since 2026-11-01, when IVA became part of the price — so a band changed on
+   * the product later never re-splits what this order charged. Null on older
+   * lines, which read the product's band instead.
+   *
+   * `vat_category` and `tax_amount` are not written. The band reads back from
+   * the rate, and writing the enum value `zero` before its migration lands
+   * would fail checkout; IVA is backed out per rate over the whole order, not
+   * summed line by line.
+   */
+  vat_category     VatCategory?
+  tax_rate_pct     Int?
+  tax_amount       Decimal?     @db.Decimal(10, 2)
+
+  order   Order          @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [product_id], references: [id])
+  variant ProductVariant @relation(fields: [variant_id], references: [id])
+
+  @@index([order_id])
+  @@map("order_items")
+}
+
+// ─── CUSTOMER PRODUCT DISCOUNT ──────────────────────────
+//
+// A price agreed with ONE customer for ONE product size (2026-10-25, user
+// request): euros off a single unit, set by staff or a rep on an order line
+// and remembered. The product's own price never changes — this customer
+// sees and pays it less the discount on the website and the app, and the
+// next order built for them starts with it on the line.
+//
+// The LATEST order that says anything about it wins: a new figure replaces
+// it, clearing the line's discount to zero deletes it. Only staff and reps
+// write it (lib/customerDiscounts.ts); a customer's own checkout only reads.
+
+model CustomerProductDiscount {
+  id                  String   @id @default(uuid()) @db.Uuid
+  user_id             String   @db.Uuid
+  product_id          String   @db.Uuid
+  variant_id          String   @db.Uuid
+  /** Euros off one unit. Always > 0 — a zero is a deleted row. */
+  amount              Decimal  @db.Decimal(10, 2)
+  /** The order it was last set on, for "since ORD-…" on the customer page. */
+  order_id            String?  @db.Uuid
+  /** Who set it last — exactly one, like Order.created_by_*. Plain ids: audit only. */
+  set_by_admin_id     String?  @db.Uuid
+  set_by_sales_rep_id String?  @db.Uuid
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  user    User           @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+  order   Order?         @relation(fields: [order_id], references: [id], onDelete: SetNull)
+
+  @@unique([user_id, variant_id])
+  @@index([variant_id])
+  @@map("customer_product_discounts")
+}
+
+// ─── DELIVERY ───────────────────────────────────────────
+//
+// There is no DeliveryZone or DeliverySlot model. Both were removed on
+// 2026-08-31 along with the whole coverage system.
+//
+// Zones carried three jobs at once: a postcode service area, the delivery
+// fee, and the free-delivery threshold. That made coverage a precondition
+// for trading — a store could not be published without a zone, a customer
+// could not save an address outside one, and a cart item was refused at
+// checkout if its store's zones missed the delivery postcode. The
+// marketplace does not work that way: partners arrange their own delivery
+// and sell nationwide.
+//
+// What replaced each job:
+//   · service area  — gone. Every live store is orderable everywhere.
+//   · delivery fee  — flat, platform-wide, in AppSetting["store"] as
+//                     `deliveryFee` / `freeDeliveryMin`. JSON, so changing
+//                     it is an admin edit rather than a migration.
+//   · booked slots  — gone. Every order is ASAP. Checkout already treated
+//                     the slot as optional and only the mobile client ever
+//                     sent one.
+//
+// Publication is now gated on admin approval instead of on owning a zone —
+// see lib/store-publish.ts.
+//
+// The delivery fee is no longer flat either: AppSetting["store"] also holds
+// `deliveryPricingMode` and a `deliveryBands` ladder, priced by distance from
+// one origin to the geocoded delivery address. Still JSON, still no migration.
+
+// ─── ORDER EDIT LOG ─────────────────────────────────────
+// Structured audit trail for post-creation edits to an order's line items
+// (Edit Order feature). One row per line-item action within a single edit
+// "save" — a save that changes 3 items writes 3 rows, all inside the same
+// $transaction as the item/stock/total mutations, so a log row can never
+// exist without the edit it describes having actually landed.
+//
+// order_item_id is deliberately a plain (non-FK) uuid, not a relation: when
+// an item is removed the OrderItem row is deleted, but its edit history
+// must survive. Always query by order_id, never by joining through
+// order_items. old/new product+variant names are snapshotted (like
+// OrderItem.product_snapshot) so history reads correctly even if the
+// product is later renamed or deleted.
+
+enum OrderEditAction {
+  update_qty
+  replace
+  remove
+  add
+  set_discount
+}
+
+enum OrderEditActor {
+  admin
+  partner
+  /**
+   * A sales rep editing an order they built.
+   *
+   * Not `admin`: there is no admins row to point at, so the log would say an
+   * admin did it and name nobody. Not `customer` either — that reads as the
+   * client changing their own order, which is the opposite of what happened.
+   * Attributed to editor_sales_rep_id.
+   */
+  sales_rep
+  /**
+   * The customer editing their own order before it is dispatched
+   * (2026-09-30). Attributed to editor_customer_id, which is the same
+   * users row as Order.user_id — kept as its own column rather than
+   * inferred, so a log row says who acted without re-reading the order.
+   */
+  customer
+}
+
+model OrderEditLog {
+  id            String          @id @default(uuid()) @db.Uuid
+  order_id      String          @db.Uuid
+  order_item_id String          @db.Uuid
+  action        OrderEditAction
+
+  old_quantity Int?
+  new_quantity Int?
+
+  old_product_id String? @db.Uuid
+  old_variant_id String? @db.Uuid
+  old_snapshot   Json?
+  new_product_id String? @db.Uuid
+  new_variant_id String? @db.Uuid
+  new_snapshot   Json?
+
+  old_line_total Decimal? @db.Decimal(10, 2)
+  new_line_total Decimal? @db.Decimal(10, 2)
+
+  note String? @db.Text
+
+  editor_type            OrderEditActor
+  editor_admin_id        String?        @db.Uuid
+  editor_partner_user_id String?        @db.Uuid
+  editor_customer_id     String?        @db.Uuid
+  /** The rep, when a rep edited it. A users row, like the two above it. */
+  editor_sales_rep_id    String?        @db.Uuid
+
+  created_at DateTime @default(now())
+
+  order               Order  @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  editor_admin        Admin? @relation("OrderEditAdmin", fields: [editor_admin_id], references: [id], onDelete: SetNull)
+  editor_partner_user User?  @relation("OrderEditPartnerUser", fields: [editor_partner_user_id], references: [id], onDelete: SetNull)
+  editor_customer     User?  @relation("OrderEditCustomer", fields: [editor_customer_id], references: [id], onDelete: SetNull)
+
+  @@index([order_id, created_at])
+  @@map("order_edit_logs")
+}
+
+// ─── RIDER ──────────────────────────────────────────────
+
+model Rider {
+  id           String      @id @default(uuid()) @db.Uuid
+  name         String
+  phone        String      @unique
+  vehicle_type VehicleType
+  is_active    Boolean     @default(true)
+  /**
+   * MV Slice 0 (2026-07-16). Nullable = platform pool (legacy pre-mv riders
+   * default here). Non-null = rider scoped to one partner store per UC-A5.
+   * SetNull on store delete so a rider can survive a store offboarding and
+   * be re-assigned. Slice 3 wires the partner /riders CRUD; Slice 6 adds
+   * the rider mobile app. See project_multivendor-roadmap.
+   */
+  store_id     String?     @db.Uuid
+  /**
+   * MV test-data flag — every mv-created row uses is_test=true during
+   * development so cleanup on cutover is a single WHERE clause.
+   */
+  is_test      Boolean     @default(false)
+  /**
+   * FCM device token for the rider mobile app (Slice 6). Nullable until
+   * the rider signs in through the app.
+   */
+  fcm_token    String?     @db.VarChar(255)
+  created_at   DateTime    @default(now())
+  updated_at   DateTime    @updatedAt
+
+  orders                  Order[]
+  subscription_deliveries SubscriptionDelivery[]
+  store                   Store?                 @relation(fields: [store_id], references: [id], onDelete: SetNull)
+
+  @@index([store_id])
+  @@index([is_test])
+  @@map("riders")
+}
+
+// ─── BANNER ─────────────────────────────────────────────
+
+model Banner {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Bilingual content (admin-customisable like promo tiles)
+  eyebrow_en  String?
+  eyebrow_es  String?
+  title_en    String  @default("")
+  title_es    String  @default("")
+  subtitle_en String?
+  subtitle_es String?
+  cta_en      String?
+  cta_es      String?
+
+  // Visual style
+  background   String? // CSS color or gradient
+  text_theme   String  @default("dark") // "light" | "dark"
+  accent_color String? @db.VarChar(9)
+  scrim_color  String? @db.VarChar(9)
+  show_eyebrow Boolean @default(false)
+
+  // Imagery
+  image_desktop String
+  image_mobile  String
+
+  // Targeting / scheduling
+  link_type     String? // "category" | "product" | "url" | null
+  link_target   String?
+  display_order Int       @default(0)
+  is_active     Boolean   @default(true)
+  active_from   DateTime?
+  active_until  DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  @@index([is_active])
+  @@map("banners")
+}
+
+// ─── B2B LEADS ─────────────────────────────────────────────
+// Inbound applications + sales enquiries from the customer-facing
+// /b2b-deals page. The B2B page surfaces three flows — supplier
+// application, partner application, contact-sales — and they all
+// land in this table tagged with `type` + `source`. Admins triage
+// from /leads in the dashboard.
+/**
+ * MV Slice 0 (2026-07-16). Separate from the legacy `B2bLead.status` string
+ * — that field tracks generic triage (new/contacted/…) for ALL lead types
+ * (supplier + partner + contact). `approval_status` is specifically the
+ * partner-approval workflow state added in Slice 1: only meaningful when
+ * `type = 'partner'`. Non-partner leads stay at `pending_review` forever
+ * and are ignored by the approval UI.
+ */
+enum B2bLeadApprovalStatus {
+  pending_review
+  approved
+  needs_info
+  rejected
+}
+
+model B2bLead {
+  id String @id @default(uuid()) @db.Uuid
+
+  /**
+   * What kind of submission this is:
+   * "business"      — wholesale BUYER from /b2b-deals. Approval creates a
+   * User + BusinessProfile with b2b pricing. No store.
+   * "partner_store" — SELLER from /partner-deals wanting to trade on Cesto.
+   * Approval creates a Store + PartnerStoreRole.
+   * "contact"       — sales-modal enquiry, no approval path.
+   * "quotation"      — product quotation request from the product detail
+   * page. No approval path, like "contact".
+   * Renamed 2026-07-27 from the original "partner"/"supplier" pair, which
+   * were inverted relative to the approval logic: the old "partner" value
+   * was set by the BUYER form yet drove store creation. Migration
+   * 20260727_b2b_business_accounts remaps existing rows.
+   */
+  type   String
+  source String // "supplier_form" | "partner_form" | "sales_modal" | "hero_cta"
+
+  // Contact identity (required for every submission shape).
+  name    String
+  company String
+  email   String
+  phone   String
+
+  // Application-only fields (supplier + partner forms carry these).
+  location        String?
+  business_type   String?
+  website         String?
+  registration_no String?
+
+  // Multi-shop payload from the supplier/partner form. Each entry:
+  // { name, address, lat, lng, place_id?, city?, postcode?, country? }.
+  // Stored as JSON so we can iterate on the shape without a migration.
+  shops Json?
+
+  // Sales-modal fields.
+  message String?
+  intent  String? // "supplier" | "partner" | "general"
+
+  // Quotation-request fields (type='quotation' only). No FK relation on
+  // quote_product_id — a lead must stay readable even if the product is
+  // later deleted, so this stays a plain UUID column, not a relation.
+  quote_product_id   String? @db.Uuid
+  /**
+   * Denormalized snapshot of the product name at request time — survives
+   * the product later being deleted or renamed.
+   */
+  quote_product_name String?
+  quote_quantity     Int?
+
+  // Admin triage.
+  status String  @default("new") // "new" | "contacted" | "qualified" | "closed" | "archived"
+  notes  String?
+
+  // ─── MV partner approval workflow (Slice 0 columns, Slice 1 logic) ────
+  /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /** Partner-approval state (see B2bLeadApprovalStatus enum comment). Only
+   * meaningful when type='partner'. Slice 1's admin approve/reject/
+   * request-info actions flip this.
+   */
+  approval_status          B2bLeadApprovalStatus @default(pending_review)
+  approved_at              DateTime?
+  /**
+   * Store row created (or reused) at approval time. See
+   * project_multivendor-roadmap Slice 1.
+   */
+  approved_store_id        String?               @db.Uuid
+  /**
+   * PartnerUser row created for the approved partner's initial login.
+   */
+  approved_partner_user_id String?               @db.Uuid
+  /**
+   * SHA-256 hash of the magic-link token sent for the "needs more info"
+   * resubmit flow. Nullable because leads without an outstanding info
+   * request don't have one.
+   */
+  magic_link_token_hash    String?               @unique
+  magic_link_expires_at    DateTime?
+
+  language   String? // "en" | "es" — what the customer was using
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /**
+   * The User created (or linked) at approval time. Replaces the legacy
+   * `approved_partner_user_id` FK to the deprecated PartnerUser table, and
+   * is set by BOTH approval paths — business and partner_store.
+   */
+  approved_user_id String? @db.Uuid
+
+  approved_store        Store?            @relation("B2bLeadApprovedStore", fields: [approved_store_id], references: [id], onDelete: SetNull)
+  approved_partner_user PartnerUser?      @relation("B2bLeadApprovedPartnerUser", fields: [approved_partner_user_id], references: [id], onDelete: SetNull)
+  approved_user         User?             @relation("B2bLeadApprovedUser", fields: [approved_user_id], references: [id], onDelete: SetNull)
+  business_profiles     BusinessProfile[] @relation("BusinessProfileSourceLead")
+  partner_profiles      PartnerProfile[]  @relation("PartnerProfileSourceLead")
+
+  @@index([status, created_at])
+  @@index([type, created_at])
+  @@index([approval_status, created_at])
+  @@map("b2b_leads")
+}
+
+// ─── HOME SECTIONS (admin-configurable marketing blocks) ────
+// Key/value store. Each row is one section ("promo-grid", "ads-banner")
+// with the full JSON config blob the customer apps render directly.
+model HomeSection {
+  key        String   @id // "promo-grid" | "ads-banner"
+  config     Json
+  updated_at DateTime @updatedAt
+  created_at DateTime @default(now())
+
+  @@map("home_sections")
+}
+
+// ─── APP SETTINGS ─────────────────────────────────────
+// Key/value store for singleton config blobs — same pattern as
+// HomeSection. Currently one row with key = "store" holds every field
+// on the admin Settings page (business info, order rules, notification
+// emails, legal copy, maintenance mode). Storing as JSON means adding
+// fields is a code change, not a migration.
+model AppSetting {
+  key        String   @id
+  config     Json
+  updated_at DateTime @updatedAt
+  created_at DateTime @default(now())
+
+  @@map("app_settings")
+}
+
+// ─── RASHAN (monthly subscription packs) ────────────────
+
+/**
+ * How often a plan delivers. A Home Grocery plan (2026-10-21) offers what the
+ * request form offers — weekly, biweekly, every_3_weeks, monthly — and counts
+ * them in WEEKS, so a delivery keeps its weekday: monthly = every 4 weeks.
+ * `every_6_weeks` is the legacy pack subscriptions' and is not offered.
+ */
+enum RashanFrequency {
+  weekly // every 7 days
+  biweekly // every 14 days
+  every_3_weeks // every 21 days
+  monthly // every 28 days (4 weeks)
+  every_6_weeks // every 42 days — legacy only
+}
+
+/** Part of the day a household prefers. A preference, never a promise. */
+enum DeliveryWindow {
+  morning // 9:00–12:00
+  afternoon // 12:00–17:00
+  evening // 17:00–21:00
+}
+
+enum RashanSubStatus {
+  active
+  paused
+  cancelled
+}
+
+enum SubDeliveryStatus {
+  scheduled // future, not yet flipped
+  awaiting_confirmation // 3 days out — user reminder pending
+  confirmed // user confirmed (or auto-confirmed at T-1)
+  preparing // ops working on it
+  on_the_way // dispatched
+  delivered
+  skipped // user opted to skip this cycle
+  failed // payment / stock failure
+}
+
+model RashanPack {
+  id                    String    @id @default(uuid()) @db.Uuid
+  /**
+   * Owning store. NULL = a Cesto/platform pack, which is what every pack
+   * was before partners could build their own. Partner packs are visible
+   * only while their store is customer-visible (live, not paused, not on
+   * the soft-delete path) — see customerVisibleStoreFilter.
+   */
+  store_id              String?   @db.Uuid
+  /**
+   * Globally unique, deliberately. Partner-created slugs are auto-prefixed
+   * with the store slug ("tilda-arroz-basmati") by the partner route, so two
+   * stores can both call a pack "esencial" without colliding.
+   * A composite @@unique([store_id, slug]) would be tidier, but slug is the
+   * PUBLIC lookup key: /api/rashan/packs/:slug, the /rashan/pack/:packType
+   * route, and the pack_slug snapshot on every existing subscription all
+   * resolve by it alone. Keeping it globally unique means none of those have
+   * to learn about stores.
+   */
+  slug                  String    @unique // "essentials" | "premium" | "custom" | custom slug
+  name_es               String
+  name_en               String
+  tagline_es            String?
+  tagline_en            String?
+  description_es        String?   @db.Text
+  description_en        String?   @db.Text
+  badge_es              String?
+  badge_en              String?
+  /**
+   * Cover photo for the pack card, uploaded by whoever owns the pack —
+   * partner or admin. Preferred over `emoji` everywhere a pack is rendered.
+   * `emoji` is kept as the fallback rather than dropped: every pack that
+   * predates this column has one and no cover, and a pack whose image fails
+   * to load still needs something in the frame.
+   */
+  cover_url             String?
+  emoji                 String?
+  gradient              String?
+  accent                String?
+  base_price            Decimal   @default(0) @db.Decimal(10, 2)
+  estimated_savings_pct Int       @default(0)
+  household_default     Int       @default(2)
+  highlights_es         String[]  @default([])
+  highlights_en         String[]  @default([])
+  /**
+   * Array of { product_id, variant_id, quantity }. Json for flexibility.
+   */
+  items                 Json      @default("[]")
+  /**
+   * When true the user starts from scratch — items is the seed (usually empty).
+   */
+  is_custom             Boolean   @default(false)
+  sort_order            Int       @default(0)
+  is_active             Boolean   @default(true)
+  /**
+   * Admin kill switch for partner packs. Partner packs publish instantly —
+   * no review queue — so moderation has to work after the fact. When this is
+   * set the pack is hidden from every customer surface regardless of
+   * `is_active`, and the partner cannot clear it by toggling their own
+   * Active switch. Only an admin can unblock.
+   * Two separate fields rather than one tri-state, because "partner turned
+   * it off" and "Cesto took it down" are different facts and the partner UI
+   * has to be able to tell them apart.
+   */
+  admin_blocked_at      DateTime?
+  admin_block_reason    String?   @db.Text
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  store         Store?               @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  subscriptions RashanSubscription[]
+
+  @@index([is_active, sort_order])
+  @@index([store_id, is_active])
+  @@map("rashan_packs")
+}
+
+model RashanSubscription {
+  id                  String          @id @default(uuid()) @db.Uuid
+  user_id             String          @db.Uuid
+  /**
+   * Optional reference to the source pack. Null when the user picked "custom" or the pack was deleted.
+   */
+  pack_id             String?         @db.Uuid
+  /**
+   * Which store fulfils this subscription. NULL = Cesto. Denormalised from
+   * the pack at creation rather than read through pack_id, for two reasons:
+   * the pack can later be deleted or reassigned, and the "one active
+   * subscription per store" rule needs a column it can be indexed on.
+   * That rule is enforced by a PARTIAL UNIQUE INDEX created in migration
+   * 20260804160000_partner_rashan_packs. Prisma cannot express a partial
+   * index, so it does not appear in this model — `prisma migrate diff` will
+   * report it as drift. Do not "fix" that by dropping the index.
+   */
+  store_id            String?         @db.Uuid
+  /**
+   * Snapshot of the source pack's slug at creation time — used to render the right pack visuals even after edits.
+   */
+  pack_slug           String?
+  /**
+   * Snapshot of the items at creation/last-edit time: [{ product_id, variant_id, quantity }]
+   */
+  items               Json            @default("[]")
+  household           Int             @default(2)
+  frequency           RashanFrequency @default(monthly)
+  status              RashanSubStatus @default(active)
+  address_id          String          @db.Uuid
+  /**
+   * Free-form preference like "monday-15:00" — admin can use it for slot routing.
+   */
+  slot_preference     String?
+  payment_method      PaymentMethod   @default(cod)
+  next_delivery_date  DateTime?
+  needs_confirmation  Boolean         @default(false)
+  total_per_cycle     Decimal         @default(0) @db.Decimal(10, 2)
+  cycles_completed    Int             @default(0)
+  paused_at           DateTime?
+  cancelled_at        DateTime?
+  cancellation_reason String?         @db.Text
+  admin_notes         String?         @db.Text
+  /**
+   * Home Grocery plan preferences (2026-10-21). ISO weekday, 1 = Monday …
+   * 7 = Sunday (a CHECK constraint keeps it there), and a part of the day.
+   * They prefill each new order's slot (its day and part of the day), which
+   * the household can change for that order; staff see them as the
+   * household's usual preference.
+   */
+  preferred_weekday   Int?
+  preferred_window    DeliveryWindow?
+  /** Remind them when their next order is due (was: when a delivery is planned). */
+  notify_before       Boolean         @default(true)
+  /** The due date they were last reminded about — the sweep reminds once per due date. */
+  reminded_for        DateTime?       @db.Date
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @updatedAt
+
+  /** The household's Home Grocery orders — placed by it, by staff or by a rep. */
+  orders     Order[]                @relation("PlanOrders")
+  user       User                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  pack       RashanPack?            @relation(fields: [pack_id], references: [id])
+  /**
+   * SetNull, not Cascade: if a store is ever hard-deleted the customer's
+   * subscription history and its delivery records must survive. The items
+   * are already snapshotted on the row.
+   */
+  store      Store?                 @relation(fields: [store_id], references: [id], onDelete: SetNull)
+  address    Address                @relation(fields: [address_id], references: [id])
+  deliveries SubscriptionDelivery[]
+
+  @@index([user_id])
+  @@index([status])
+  @@index([next_delivery_date])
+  @@index([store_id, status])
+  @@map("rashan_subscriptions")
+}
+
+model SubscriptionDelivery {
+  id              String            @id @default(uuid()) @db.Uuid
+  subscription_id String            @db.Uuid
+  scheduled_date  DateTime
+  status          SubDeliveryStatus @default(scheduled)
+  item_count      Int               @default(0)
+  total           Decimal           @default(0) @db.Decimal(10, 2)
+  /**
+   * Filled in once the cycle is converted into a real Order at fulfillment time.
+   */
+  order_id        String?           @unique @db.Uuid
+  /**
+   * Rider assigned directly to this delivery — set independently of order_id so ops can plan ahead.
+   */
+  rider_id        String?           @db.Uuid
+  failure_reason  String?           @db.Text
+  delivered_at    DateTime?
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  subscription RashanSubscription @relation(fields: [subscription_id], references: [id], onDelete: Cascade)
+  order        Order?             @relation(fields: [order_id], references: [id])
+  rider        Rider?             @relation(fields: [rider_id], references: [id])
+
+  @@index([subscription_id])
+  @@index([status])
+  @@index([scheduled_date])
+  @@index([rider_id])
+  @@map("subscription_deliveries")
+}
+
+// ─── RASHAN LEADS (interest form) ────────────────────────
+// The /rashan landing page asks "want rashan but not right now — or not
+// sure how to order?" and captures a lead instead of forcing the visitor
+// through the pack builder. Public (no login): the audience this exists
+// for is exactly the one that bounces off a login wall.
+//
+// Deliberately its OWN table rather than a B2bLead `type`. A rashan lead
+// is a household, not a business: family size, delivery cadence and
+// dietary notes have no home in B2bLead's company/business_type columns.
+
+/**
+ * Cadence the household says it wants. Wider than `RashanFrequency` (the
+ * subscription enum) on purpose — the form asks in plain weeks because
+ * that's how people think about rashan. `leadFrequencyToSubscription` in
+ * packages/shared/src/api/services/rashanLeads.ts narrows it onto the
+ * subscription enum when the lead is carried into the builder.
+ */
+enum RashanLeadFrequency {
+  weekly // every 7 days
+  biweekly // every 2 weeks
+  every_3_weeks // every 3 weeks
+  monthly // every 4 weeks
+}
+
+/**
+ * Admin triage. `converted` is terminal-positive — the household went on
+ * to activate a subscription. Mirrors B2bLead's vocabulary so an admin
+ * moving between the two inboxes doesn't relearn the funnel.
+ */
+enum RashanLeadStatus {
+  new
+  contacted
+  qualified
+  converted
+  closed
+  archived
+}
+
+/**
+ * How the household prefers to be reached. WhatsApp first — it is the
+ * default channel for the desi community this page serves.
+ */
+enum RashanLeadContactPref {
+  whatsapp
+  call
+  sms
+  email
+}
+
+model RashanLead {
+  id String @id @default(uuid()) @db.Uuid
+
+  // ─── Contact ───
+  name     String
+  phone    String
+  /**
+   * Optional — plenty of submissions will be phone-only.
+   */
+  email    String?
+  /**
+   * Language the form was submitted in, for follow-up.
+   */
+  language String? // "en" | "es"
+
+  // ─── Household ───
+  household_size Int
+  adults         Int?
+  children       Int?
+
+  // ─── What they want ───
+  frequency            RashanLeadFrequency
+  /**
+   * "Start me around this date" — free-form intent, not a booking.
+   */
+  preferred_start_date DateTime?
+  /**
+   * Pack slug they were looking at when they opened the form, if any.
+   */
+  interested_pack_slug String?
+  /**
+   * Rough monthly spend they have in mind. Helps ops size the pack.
+   */
+  budget_per_cycle     Decimal?            @db.Decimal(10, 2)
+  /**
+   * Halal / no-beef / allergies / "extra atta" — free text.
+   */
+  dietary_notes        String?             @db.Text
+
+  // ─── Where + when ───
+  address_line   String?
+  city           String?
+  postcode       String?
+  /**
+   * Free-form like "weekends" or "after 18:00". Carried into the
+   * subscription's slot_preference on conversion.
+   */
+  preferred_slot String?
+
+  contact_pref RashanLeadContactPref @default(whatsapp)
+
+  // ─── Provenance + triage ───
+  source String           @default("rashan_form")
+  status RashanLeadStatus @default(new)
+  notes  String?          @db.Text
+
+  /**
+   * Set when the form was submitted by a logged-in customer. Relation-free
+   * on purpose: the lead is a point-in-time snapshot of what someone told
+   * us, and it should survive the account being deleted. Same reasoning for
+   * converted_subscription_id.
+   */
+  user_id                   String?   @db.Uuid
+  converted_subscription_id String?   @db.Uuid
+  converted_at              DateTime?
+
+  // ─── Home Grocery approval (2026-10-11) ───
+  /**
+   * The decision, separate from `status` exactly as B2bLead keeps its
+   * approval_status apart from its triage string. `status` stays the ops
+   * funnel (contacted, closed…); this is the one fact the customer is told.
+   * Open = pending_review and not closed/archived — see the admin route.
+   */
+  approval_status      RashanLeadApprovalStatus @default(pending_review)
+  approved_at          DateTime?
+  /**
+   * The account this request became a Home Grocery subscriber on — created
+   * at approval, or the one they already had. A relation, unlike `user_id`
+   * above, because the admin list joins through it; SetNull keeps the
+   * request readable after the account is deleted.
+   */
+  approved_user_id     String?                  @db.Uuid
+  approved_by_admin_id String?                  @db.Uuid
+  rejected_at          DateTime?
+  /**
+   * Why it was turned down. Shown to the CUSTOMER — in the notification, the
+   * email and on /rashan — so it is written for them, not as an ops note.
+   */
+  rejection_reason     String?                  @db.Text
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  approved_user User?                @relation("RashanLeadApprovedUser", fields: [approved_user_id], references: [id], onDelete: SetNull)
+  profiles      HomeGroceryProfile[] @relation("HomeGroceryProfileSourceLead")
+
+  @@index([status, created_at])
+  @@index([created_at])
+  @@index([approval_status, created_at])
+  @@map("rashan_leads")
+}
+
+enum RashanLeadApprovalStatus {
+  pending_review
+  approved
+  rejected
+}
+
+/**
+ * Marks a Home Grocery subscriber — the household counterpart of
+ * BusinessProfile. Snapshotted from the approved RashanLead and editable
+ * afterwards, because it is what ops read when building the month's order.
+ *
+ * Why a table and not a flag: being opened by staff (created_by_admin_id)
+ * was the only marker the Home Grocery tab had, and approving a customer who
+ * signed themselves up sets no such column — they would have been approved
+ * into a tab that cannot see them. And the household details must outlive
+ * the request they came from.
+ */
+model HomeGroceryProfile {
+  id      String @id @default(uuid()) @db.Uuid
+  user_id String @unique @db.Uuid
+
+  household_size   Int
+  adults           Int?
+  children         Int?
+  frequency        RashanLeadFrequency @default(monthly)
+  preferred_slot   String?
+  dietary_notes    String?             @db.Text
+  budget_per_cycle Decimal?            @db.Decimal(10, 2)
+  /**
+   * The number they gave on the form. Not copied to User.phone: that column
+   * is @unique and production requests already repeat numbers across
+   * accounts — the same reason BusinessProfile.contact_phone exists.
+   */
+  contact_phone    String?
+
+  source_lead_id       String?  @db.Uuid
+  approved_at          DateTime @default(now())
+  approved_by_admin_id String?  @db.Uuid
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user        User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  source_lead RashanLead? @relation("HomeGroceryProfileSourceLead", fields: [source_lead_id], references: [id], onDelete: SetNull)
+
+  @@map("home_grocery_profiles")
+}
+
+// ─── HELP CENTER ─────────────────────────────────────────
+// Walmart-style help center. Categories group articles (e.g. "Orders &
+// Delivery", "Returns & Refunds"); each article carries a markdown body
+// in both languages so the customer site renders in whichever language
+// the visitor has selected. Admin manages everything from /help-center.
+
+model HelpCategory {
+  id         String   @id @default(uuid()) @db.Uuid
+  slug       String   @unique
+  title_en   String
+  title_es   String
+  /**
+   * Lucide icon name (e.g. "Package", "CreditCard"). Resolved client-side.
+   */
+  icon       String?
+  sort_order Int      @default(0)
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  articles HelpArticle[]
+
+  @@index([is_active])
+  @@map("help_categories")
+}
+
+model HelpArticle {
+  id          String   @id @default(uuid()) @db.Uuid
+  category_id String   @db.Uuid
+  slug        String   @unique
+  title_en    String
+  title_es    String
+  body_en     String   @default("") @db.Text
+  body_es     String   @default("") @db.Text
+  sort_order  Int      @default(0)
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  category HelpCategory @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@index([category_id])
+  @@index([is_active])
+  @@map("help_articles")
+}
+
+// ─── NOTIFICATIONS ───────────────────────────────────────
+// One row per delivered notification. Customer rows are owned by `user_id`;
+// admin activity-feed rows have `user_id = null` and surface in the bell
+// dropdown on the admin dashboard.
+//
+// Push delivery (FCM / Expo / OneSignal) is fire-and-forget from the
+// notification service — the row is the source of truth, the push channel
+// is best-effort. If the push fails the user still sees the notification in
+// their inbox on next fetch.
+
+model Notification {
+  id         String               @id @default(uuid()) @db.Uuid
+  audience   NotificationAudience
+  /**
+   * Recipient. Null for admin-audience rows (visible to every admin).
+   */
+  user_id    String?              @db.Uuid
+  type       NotificationType
+  title_es   String
+  title_en   String
+  body_es    String               @db.Text
+  body_en    String               @db.Text
+  /**
+   * Where the user should land when tapping the notification. App-relative
+   * path like "/order/abc" or admin "/orders/abc".
+   */
+  deeplink   String?
+  read       Boolean              @default(false)
+  read_at    DateTime?
+  /**
+   * Optional structured payload sent over the push channel — order id,
+   * product id, etc. Frontends use this to refresh queries in place.
+   */
+  data       Json?
+  created_at DateTime             @default(now())
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([audience, created_at])
+  @@index([user_id, read, created_at])
+  @@map("notifications")
+}
+
+// ─── SUPPORT TICKETS ─────────────────────────────────────
+// Customer-submitted help requests from the public /contact page and
+// the Help Center "Talk to a human" CTAs. Works for both logged-in
+// users and guests (user_id is nullable for guest submissions).
+// Admin triage from /support in the dashboard.
+
+model SupportTicket {
+  id String @id @default(uuid()) @db.Uuid
+
+  /**
+   * Set when a logged-in user submits. Null for guest submissions.
+   */
+  user_id String? @db.Uuid
+
+  /**
+   * Always captured — falls back to logged-in user's profile if blank.
+   */
+  name  String
+  email String
+  /**
+   * Optional — phone for callback.
+   */
+  phone String?
+
+  subject String
+  body    String @db.Text
+
+  /**
+   * Where the submission came from: "contact_form" | "help_center" | "order_detail" | etc.
+   */
+  source String @default("contact_form")
+
+  /**
+   * Optional — link to a specific order if the question is order-related.
+   */
+  order_id String? @db.Uuid
+
+  /**
+   * Triage state.
+   */
+  status      String  @default("new") // "new" | "in_progress" | "resolved" | "archived"
+  admin_notes String? @db.Text
+
+  /**
+   * "en" | "es" — what UI language the customer was using.
+   */
+  language String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, created_at])
+  @@index([user_id])
+  @@map("support_tickets")
+}
+
+// ─── STORES ──────────────────────────────────────────────
+// Partner shops (Shan, Tilda, Laila, …) and the house shop (Cesto = null).
+// Was previously a JSON blob under HomeSection key "top-shops"; migrated to
+// a first-class table so products can be reliably queried under their store
+// and followers/hours/verification can be tracked properly.
+
+/**
+ * MV Slice 0 (2026-07-16). Store lifecycle state, distinct from the
+ * soft-delete flags below (which are terminal) and from `is_active`
+ * (which is admin's "hide from customers" toggle for stores in either
+ * `draft` or `live` states).
+ * - `draft` — created by admin approval (Slice 1) but not yet customer-
+ * visible; partner is completing profile setup, or admin is holding
+ * back publication. A partner CANNOT leave this state themselves —
+ * `draft → live` is the admin's approval and only admin routes can
+ * perform it. See lib/store-publish.ts.
+ * - `live` — fully published. Existing stores default here (backwards
+ * compatible additive migration).
+ * - `suspended` — admin toggled off temporarily, reversible without the
+ * 5-day soft-delete grace path.
+ * Customer-facing filters use status='live' AND deletion_scheduled_at IS NULL
+ * AND deleted_at IS NULL — added to `customerVisibleStoreFilter` in Slice 1.
+ */
+enum StoreStatus {
+  draft
+  live
+  /**
+   * MV Slice 4+ (2026-07-22). Self-serve partner pause — partner can toggle
+   * their own store between 'live' and 'paused' from the partner dashboard.
+   * Hides from customer surfaces (customerVisibleStoreFilter still filters
+   * status='live') but does NOT block partner login (partner needs to
+   * un-pause). Admin can also set/unset paused. Distinct from 'draft'
+   * (still being set up) and 'suspended' (admin punishment, blocks login).
+   */
+  paused
+  suspended
+}
+
+/// How a Store came into existence. Drives which stores an admin may link a
+/// partner application to: only `admin` stores are unclaimed inventory that
+/// Cesto set up itself. A `partner_approval` store was created FOR a specific
+/// partner and already belongs to them, so offering it in the link picker
+/// would mean handing one partner's storefront to another.
+///
+/// Not derivable after the fact: "has no PartnerStoreRole" is true both for an
+/// admin-created store and for an approval-created store whose partner was
+/// later removed, and those must not be treated the same.
+enum StoreOrigin {
+  admin
+  partner_approval
+}
+
+model Store {
+  id              String      @id @default(uuid()) @db.Uuid
+  /// Provenance. See StoreOrigin. Defaults to `admin` because that is what a
+  /// row created through the admin panel is; the approval path sets it
+  /// explicitly.
+  created_via     StoreOrigin @default(admin)
+  /**
+   * Stable slug — matches the previous Product.shop_id string values and the
+   * HomeSection top-shops JSON ids ("shan", "tilda", …).
+   */
+  slug            String      @unique
+  name            String
+  tagline_es      String?
+  tagline_en      String?
+  description_es  String?     @db.Text
+  description_en  String?     @db.Text
+  logo_url        String?
+  /**
+   * Background tint behind the logo tile on cards + storefront header.
+   */
+  logo_bg         String      @default("#FFFFFF") @db.VarChar(9)
+  cover_url       String?
+  rating          Float?
+  rating_count    Int         @default(0)
+  /**
+   * Denormalised count kept in sync by follow/unfollow inside a transaction.
+   */
+  followers_count Int         @default(0)
+  is_active       Boolean     @default(true)
+  is_verified     Boolean     @default(false)
+  fast_delivery   Boolean     @default(false)
+  /**
+   * Free-text country of origin, e.g. "Pakistan".
+   */
+  /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * ISO 3166-1 alpha-2 code of the market this store TRADES IN — i.e. where
+   * it delivers. Not to be confused with `origin` below, which is the
+   * heritage of the goods ("Pakistan" on a Pakistani grocer trading in
+   * Madrid).
+   * Groundwork only. Nothing filters on it yet and there is no customer
+   * facing country picker, because a second market needs far more than a
+   * filter: prices are bare Decimals with EUR assumed across the schema and
+   * ~27 web files, and payment rails, tax and invoicing are all Spain-shaped.
+   * Shipping a picker before that would visibly filter while silently
+   * mispricing everything outside Spain.
+   * Landing the column now means the eventual switch-on is a filter change
+   * rather than a backfill across every store, and stores can be tagged
+   * correctly from today.
+   */
+  country         String      @default("ES") @db.VarChar(2)
+  /**
+   * Where the shop physically trades, as one free-text line
+   * ("Calle Mayor 12, 28013 Madrid"). Shown on the storefront next to the
+   * country so a customer can see who they are buying from.
+   * Deliberately unstructured and deliberately not geocoded. It is a
+   * description, not a lookup key: nothing filters, routes or prices on it.
+   * Delivery distance is measured from ONE platform origin in
+   * AppSetting["store"], not from the selling store, so this stays prose.
+   */
+  address         String?
+  origin          String?
+  contact_email   String?
+  contact_phone   String?
+  website_url     String?
+  /**
+   * JSON: { mon: { closed: bool, open?: "HH:MM", close?: "HH:MM" }, tue: …, sun: … }
+   */
+  shop_hours      Json?
+  sort_order      Int         @default(0)
+  /**
+   * 'manual' | 'import' — see Brand.source. Excel importer sets 'import'
+   * on stores it auto-creates so the admin UI can group them under
+   * Suggestions until reviewed.
+   */
+  source          String      @default("manual")
+  /**
+   * MV Slice 0 lifecycle state — see StoreStatus enum comment. Existing
+   * rows default to `live` which is the pre-mv behaviour.
+   */
+  status          StoreStatus @default(live)
+  /**
+   * MV test-data flag — every mv-created row uses is_test=true so cleanup
+   * on cutover is a single WHERE clause. See project_multivendor-roadmap.
+   */
+  is_test         Boolean     @default(false)
+
+  // ─── Soft-delete (see feedback_store-soft-delete-pattern) ─────────
+  /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /**
+   * /** Set when a super_admin schedules deletion. Store is hidden from
+   * customer surfaces immediately but visible in admin with a countdown.
+   * Cleared by cancel-deletion. Grace period is 5 days from this
+   * timestamp before permanent-delete is allowed.
+   */
+  deletion_scheduled_at          DateTime?
+  /**
+   * Which admin scheduled the deletion — audit trail. Nullable so the row
+   * survives that admin being offboarded.
+   */
+  deletion_scheduled_by_admin_id String?   @db.Uuid
+  /**
+   * Required reason captured at schedule time. Surfaced in admin UI.
+   */
+  deletion_reason                String?   @db.Text
+  /**
+   * Tombstone. Set on permanent-delete (super_admin only, after grace period).
+   * Row is preserved forever so order history and audit trail stay intact;
+   * hidden from all admin/customer surfaces except the "Deleted stores"
+   * archive where super_admin can restore.
+   */
+  deleted_at                     DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  products                  Product[]
+  followers                 StoreFollow[]
+  deletion_scheduled_by     Admin?                          @relation("StoreDeletionScheduler", fields: [deletion_scheduled_by_admin_id], references: [id], onDelete: SetNull)
+  // ─── MV Slice 0 reverse relations ─────────────────────────────────
+  partner_users             PartnerUser[]
+  partner_roles             PartnerStoreRole[]
+  riders                    Rider[]
+  approved_from_leads       B2bLead[]                       @relation("B2bLeadApprovedStore")
+  partner_import_jobs       PartnerProductImportJob[]
+  partner_import_duplicates PartnerProductImportDuplicate[]
+  // ─── MV Slice 4 reverse relation ──────────────────────────────────
+  // Sub-orders (or single-store orders) attributed to this store. Pre-mv
+  // and Cesto-only orders leave orders.store_id null and don't appear here.
+  orders                    Order[]
+  // ─── Partner rashan ───────────────────────────────────────────────
+  rashan_packs              RashanPack[]
+  /// Reps who sell from this shop (SalesRepStore, 2026-10-26).
+  sales_reps                SalesRepStore[]
+  /// The one-shop column this replaced — kept until it is dropped. Not read.
+  legacy_sales_reps         SalesRep[]                      @relation("SalesRepLegacyStore")
+  rashan_subscriptions      RashanSubscription[]
+  submitted_categories      Category[]                      @relation("CategoryPartnerSubmission")
+  partner_profiles          PartnerProfile[]                @relation("PartnerProfileLinkedStore")
+
+  @@index([is_active])
+  @@index([slug])
+  @@index([source, is_active])
+  @@index([country])
+  @@index([deletion_scheduled_at])
+  @@index([deleted_at])
+  @@index([status])
+  @@index([is_test])
+  @@map("stores")
+}
+
+model StoreFollow {
+  user_id    String   @db.Uuid
+  store_id   String   @db.Uuid
+  created_at DateTime @default(now())
+
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, store_id])
+  @@index([store_id])
+  @@map("store_follows")
+}
+
+// ─── PRODUCT IMPORT JOBS ────────────────────────────────
+// Excel bulk-import switched from a synchronous request to a background job
+// in Layer 3. The POST endpoint enqueues a job (state = queued) and returns
+// its id immediately; a same-process worker (setImmediate) parses the sheet
+// and inserts rows, updating progress every batch. The admin UI polls
+// GET /api/admin/products/import/jobs/:id for status + progress.
+//
+// Idempotency: idempotency_key is a SHA-256 of the uploaded file bytes.
+// A duplicate submit that matches an existing done/running job returns
+// THAT job's id, so the client keeps seeing the same report.
+
+enum ImportJobStatus {
+  queued
+  running
+  done
+  failed
+  interrupted // process restarted mid-run; job never finished
+}
+
+model ProductImportJob {
+  id              String          @id @default(uuid()) @db.Uuid
+  admin_id        String          @db.Uuid
+  idempotency_key String
+  status          ImportJobStatus @default(queued)
+  total           Int? // null until workbook is parsed; then row count
+  processed       Int             @default(0)
+  result          Json? // BulkImportResult payload when status = done
+  error_message   String?
+  filename        String
+  file_size       Int
+  created_at      DateTime        @default(now())
+  started_at      DateTime?
+  finished_at     DateTime?
+
+  admin             Admin                    @relation(fields: [admin_id], references: [id], onDelete: Cascade)
+  import_duplicates ProductImportDuplicate[]
+
+  @@index([admin_id, created_at])
+  @@index([idempotency_key])
+  @@index([status])
+  @@map("product_import_jobs")
+}
+
+// ─── PRODUCT IMPORT DUPLICATES (staged rows) ───────────
+// Rows the Excel importer flagged as duplicates of an existing product.
+// Instead of silently dropping them, we persist the full parsed payload so
+// admin can review on the Duplicates page → "From Excel import" tab and
+// either create anyway (override the duplicate guard) or dismiss.
+//
+// Detection uses the same identity fingerprint as the /duplicates endpoint
+// (name_es + name_en + brand + origin + category + subcategory +
+// product_type) + store awareness — only same-identity same-store rows
+// land here.
+enum ImportDuplicateStatus {
+  pending // awaiting admin decision
+  created // admin clicked "Create anyway" → product landed in catalogue
+  dismissed // admin dropped it — payload kept for audit
+}
+
+model ProductImportDuplicate {
+  id                   String                @id @default(uuid()) @db.Uuid
+  /**
+   * Which import job produced this row. Cascade delete so cleaning up an
+   * old job also cleans up its unresolved pending rows.
+   */
+  job_id               String                @db.Uuid
+  /**
+   * 1-indexed row number in the uploaded spreadsheet — surfaced in the
+   * review UI so admin can trace it back to the sheet if needed.
+   */
+  source_row_number    Int
+  /**
+   * Full parsed row — enough to actually create the product on Create
+   * Anyway. Same shape as the importer's internal `products.push({...})`
+   * payload (name, brand, category slug/id, variants, image URLs, etc.).
+   */
+  payload              Json
+  /**
+   * The existing product this row duplicated. SET NULL if the target is
+   * later deleted — the snapshot below keeps display readable.
+   */
+  matched_product_id   String?               @db.Uuid
+  /**
+   * Display snapshot of the matched product's name at the time the row
+   * was flagged. Survives matched_product_id going NULL.
+   */
+  matched_product_name String
+  status               ImportDuplicateStatus @default(pending)
+  /**
+   * When admin acted on this row. Null while status = 'pending'.
+   */
+  resolved_at          DateTime?
+  created_at           DateTime              @default(now())
+  updated_at           DateTime              @updatedAt
+
+  job             ProductImportJob @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  matched_product Product?         @relation("import_duplicate_matches", fields: [matched_product_id], references: [id], onDelete: SetNull)
+
+  @@index([status, created_at])
+  @@index([job_id])
+  @@index([matched_product_id])
+  @@map("product_import_duplicates")
+}
+
+// ─── PARTNER PRODUCT IMPORT JOB ────────────────────────
+// Same worker model as ProductImportJob but scoped to a partner Store —
+// jobs are FK'd to the partner_user + the target store so a partner can
+// only ever see and drive their own imports. Kept in a separate table so
+// admin's cross-store surface never intersects with a partner's, and so
+// a schema drift in one doesn't ripple into the other.
+
+model PartnerProductImportJob {
+  id              String          @id @default(uuid()) @db.Uuid
+  /**
+   * The partner User (a customer user with a PartnerStoreRole) who
+   * submitted the import. Rows survive account offboarding via SetNull
+   * so audit history stays intact.
+   */
+  partner_user_id String?         @db.Uuid
+  /**
+   * The Store the imported products land in. FORCED from req.partnerRole
+   * server-side — never accepted from a request body.
+   */
+  store_id        String          @db.Uuid
+  idempotency_key String
+  status          ImportJobStatus @default(queued)
+  total           Int?
+  processed       Int             @default(0)
+  result          Json?
+  error_message   String?
+  filename        String
+  file_size       Int
+  created_at      DateTime        @default(now())
+  started_at      DateTime?
+  finished_at     DateTime?
+
+  partner_user      User?                           @relation(fields: [partner_user_id], references: [id], onDelete: SetNull)
+  store             Store                           @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  import_duplicates PartnerProductImportDuplicate[]
+
+  @@index([store_id, created_at])
+  @@index([partner_user_id, created_at])
+  @@index([idempotency_key])
+  @@index([status])
+  @@map("partner_product_import_jobs")
+}
+
+/// Rows a partner's Excel import flagged as duplicating an existing product,
+/// held for review instead of being silently skipped.
+///
+/// Separate from ProductImportDuplicate rather than sharing it: that model's
+/// job_id FKs to product_import_jobs (the ADMIN importer's table), and partner
+/// imports live in partner_product_import_jobs. Making one column point at
+/// either table would need a nullable pair plus a check constraint, and every
+/// query would have to remember which side it is on. Two tables keep the
+/// store-scoping guarantee structural — a partner query cannot reach admin
+/// rows because they are not in the same table.
+model PartnerProductImportDuplicate {
+  id                   String                @id @default(uuid()) @db.Uuid
+  /// Cascade: cleaning up an old job also clears its unresolved rows.
+  job_id               String                @db.Uuid
+  /// Denormalised from the job so every read can be store-scoped without a
+  /// join. Cascade with the store, same as the job itself.
+  store_id             String                @db.Uuid
+  /// 1-indexed row number in the uploaded sheet, so a partner can trace a
+  /// flagged row back to the file they sent.
+  source_row_number    Int
+  /// Full parsed row — enough to create the product on "Create anyway".
+  payload              Json
+  /// The existing product this row duplicated. SET NULL if that product is
+  /// later deleted; the snapshot below keeps the card readable.
+  matched_product_id   String?               @db.Uuid
+  matched_product_name String
+  status               ImportDuplicateStatus @default(pending)
+  resolved_at          DateTime?
+  created_at           DateTime              @default(now())
+  updated_at           DateTime              @updatedAt
+
+  job             PartnerProductImportJob @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  store           Store                   @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  matched_product Product?                @relation("partner_import_duplicate_matches", fields: [matched_product_id], references: [id], onDelete: SetNull)
+
+  @@index([store_id, status, created_at])
+  @@index([job_id])
+  @@index([matched_product_id])
+  @@map("partner_product_import_duplicates")
+}
+
+// ─── BRANDS (first-class catalogue table) ──────────────
+// Promoted from a JSON blob on home_sections (key='top-brands') to its own
+// table on 2026-07-13. `Product.brand_id` FKs here; `Product.brand` (string)
+// is kept in sync as a denormalised fallback for older API deploys.
+model Brand {
+  id         String   @id @default(uuid()) @db.Uuid
+  /**
+   * Display name. Unique case-insensitive per (name) index below — the
+   * Excel importer and product form both look this up when resolving a
+   * brand string to a row.
+   */
+  name       String   @unique
+  /**
+   * URL-safe slug derived from name. Powers /brands/:slug once we ship
+   * the brand detail page. Unique so we don't collide on collision-prone
+   * names like "El Corte" vs "el-corte".
+   */
+  slug       String   @unique
+  /**
+   * Logo image — URL, server path, or data URL. Rendered on the customer
+   * Top Brands rail. Null when the admin hasn't uploaded one yet.
+   */
+  logo_url   String?
+  /**
+   * Optional hex background behind the logo on the customer rail.
+   */
+  logo_bg    String?
+  /**
+   * Deep-link when the chip is clicked. Defaults to the brand-filtered
+   * category listing when null.
+   */
+  link       String?
+  is_active  Boolean  @default(true)
+  sort_order Int      @default(0)
+  /**
+   * How this brand row landed in the DB — 'manual' (admin created it via
+   * the Brands page) or 'import' (Excel importer auto-parked it as
+   * is_active=false pending admin review). Drives the "Suggestions"
+   * filter + badge on the admin BrandsPage.
+   */
+  source     String   @default("manual")
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  products Product[]
+
+  @@index([is_active, sort_order])
+  @@index([source, is_active])
+  @@map("brands")
+}
+
+// ─── ORIGINS (first-class catalogue table) ─────────────
+// Promoted from a JSON blob on home_sections (key='shop-by-origin') to its
+// own table on 2026-07-13. `Product.origin_id` FKs here; `Product.origin`
+// (string) is kept in sync as a denormalised fallback.
+model Origin {
+  id           String   @id @default(uuid()) @db.Uuid
+  /**
+   * Lowercase slug, e.g. "pakistan". Matches the string value the Excel
+   * importer resolves against and drives the /categories?origin={key} link.
+   */
+  key          String   @unique
+  label_es     String
+  label_en     String
+  bg_color     String?
+  accent_color String?
+  image_url    String?
+  /**
+   * Deep-link when the card is clicked. Defaults to /categories?origin={key}
+   * when null.
+   */
+  link         String?
+  is_active    Boolean  @default(true)
+  sort_order   Int      @default(0)
+  /**
+   * 'manual' | 'import' — see Brand.source.
+   */
+  source       String   @default("manual")
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  products Product[]
+
+  @@index([is_active, sort_order])
+  @@index([source, is_active])
+  @@map("origins")
+}
+
+// ─── MV PARTNER USERS (Slice 0 foundation) ─────────────────────
+// Auth identity for approved partner store owners. Mirror of the Admin
+// table's shape (bcrypt password, refresh-token rotation, forced first-
+// login pw change) but scoped to exactly one Store via `store_id`.
+//
+// Slice 0 lands the tables empty. Slice 1's approval workflow creates
+// the first rows. Slice 2 wires /api/partner/auth/* onto them.
+//
+// Design: PartnerUser is intentionally separate from Admin (not a new
+// AdminRole) because:
+//   · Different login URL (/partner vs /admin)
+//   · Different permission scope (store-owned data only)
+//   · Different password rotation policy (partner-initiated vs admin ops)
+//   · Cleaner code — no runtime "am I a partner?" branch on every admin
+//     request
+// See project_multivendor-roadmap ground rule + feedback_partner-dashboard-
+// reuses-admin for the reuse-vs-fork boundary.
+
+model PartnerUser {
+  id                  String    @id @default(uuid()) @db.Uuid
+  store_id            String    @db.Uuid
+  name                String
+  email               String    @unique
+  phone               String?
+  password_hash       String
+  is_active           Boolean   @default(true)
+  is_test             Boolean   @default(false)
+  last_login_at       DateTime?
+  /**
+   * Null on seeded/newly-approved rows → forced pw rotate at first login
+   * (same convention as Admin.password_changed_at). Set to NOW() after
+   * the partner completes /partner/set-password in Slice 2.
+   */
+  password_changed_at DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  store               Store                 @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  refresh_tokens      PartnerRefreshToken[]
+  /**
+   * Reverse of B2bLead.approved_partner_user_id (audit trail — which lead
+   * became this partner user). Nullable via SetNull on the FK.
+   */
+  approved_from_leads B2bLead[]             @relation("B2bLeadApprovedPartnerUser")
+
+  @@index([store_id])
+  @@index([is_active])
+  @@index([is_test])
+  @@map("partner_users")
+}
+
+// Mirror of AdminRefreshToken — opaque refresh tokens stored SHA-256'd,
+// rotated on refresh, reuse-attack detection kills all live tokens for the
+// subject.
+
+model PartnerRefreshToken {
+  id              String    @id @default(uuid()) @db.Uuid
+  partner_user_id String    @db.Uuid
+  token_hash      String    @unique
+  expires_at      DateTime
+  revoked_at      DateTime?
+  created_at      DateTime  @default(now())
+
+  partner_user PartnerUser @relation(fields: [partner_user_id], references: [id], onDelete: Cascade)
+
+  @@index([partner_user_id])
+  @@index([expires_at])
+  @@map("partner_refresh_tokens")
+}
+
+// ─── UNIFIED PARTNER IDENTITY (post-Slice-2 rework) ────────────────────
+//
+// The Slice-2 initial cut had partners in their own `partner_users` table
+// with a separate JWT secret and refresh table. On feedback we merged
+// partner identity INTO the customer User table — a partner is now just
+// a User with one or more PartnerStoreRole rows tying them to a Store.
+// One password, one JWT, one auth surface across customer web + admin.
+//
+// The old `partner_users` and `partner_refresh_tokens` tables stay in
+// schema for now (dev safety net) but no code writes to them any more.
+// A follow-up migration will drop them once the rework is verified.
+
+enum PartnerRole {
+  owner // Full control of the store — invited during approval.
+  manager // Same product / order / zone access as owner, cannot invite others. Slice 3+.
+}
+
+/// A sales rep: a User who opens accounts and builds orders for them.
+///
+/// A ROLE ON A USER, not an Admin row, and deliberately so. Three things
+/// follow from it and none of them work the other way round:
+///
+///   · Anyone with an account can become one. Granting the role is a row,
+///     not a second identity with its own password to issue and reset.
+///   · The rep app authenticates with the ordinary user JWT and calls
+///     /api/sales/*, exactly as the partner app uses /api/partner/*. The
+///     dedicated partner auth surface was retired for this reason — see
+///     routes/partner/auth.ts.
+///   · A rep who is also a customer, or who also runs a shop, is one person
+///     with one login and several roles, which is already how PartnerStoreRole
+///     works.
+///
+/// Revoking is `is_active = false`, never a delete: the orders and accounts
+/// they created still point here, and the history has to stay readable.
+model SalesRep {
+  user_id             String   @id @db.Uuid
+  /// Staff number as it appears on paperwork. Optional — most will not have
+  /// one — and unique when set so two reps cannot share it.
+  code                String?  @unique
+  is_active           Boolean  @default(true)
+  /// Who granted the role, and when. A future "apply to become a rep" flow
+  /// writes the same row, with the admin who approved it here.
+  granted_by_admin_id String?  @db.Uuid
+  granted_at          DateTime @default(now())
+  /// Free text for the admin: territory, working hours, anything.
+  notes               String?  @db.Text
+  /// DEPRECATED (2026-10-26): the one shop a rep sold from before they could
+  /// have several (`stores`). Copied into sales_rep_stores by the migration
+  /// that added it and neither read nor written since — kept only so a server
+  /// still running the old code during that deploy keeps working. Drop it in
+  /// a later migration.
+  legacy_store_id     String?  @map("store_id") @db.Uuid
+  /// Cesto's own catalogue — products with no shop (store_id null) — which
+  /// has no Store row to point at, so it is a flag beside `stores`.
+  house_store         Boolean  @default(false)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  user         User   @relation("SalesRepProfile", fields: [user_id], references: [id], onDelete: Cascade)
+  granted_by   Admin? @relation("SalesRepGrantedBy", fields: [granted_by_admin_id], references: [id], onDelete: SetNull)
+  legacy_store Store? @relation("SalesRepLegacyStore", fields: [legacy_store_id], references: [id], onDelete: SetNull)
+  /// The shops this rep sells from (2026-10-26): their catalogue, and so every
+  /// order they build or add to, holds only these shops' active products —
+  /// and Cesto's own when `house_store`. Set by an admin; with none of either
+  /// the rep sells nothing. The order is still Cesto's (lib/createOrder) —
+  /// this narrows what a rep may pick, not who fulfils it. See lib/repStore.
+  stores       SalesRepStore[]
+  /// Single products an admin assigned them (2026-10-27), from any shop or
+  /// Cesto's own — sold beside their shops' products, not instead of them.
+  /// See lib/repStore.
+  products     SalesRepProduct[]
+  /// Their usual share of each order's profit, as a percentage. An order
+  /// follows it until it is approved, then keeps its own (lib/repEarnings).
+  commission_pct Decimal? @db.Decimal(5, 2)
+  /// DEPRECATED (2026-10-28): the period statements earnings were before
+  /// they came from each order. Published and paid ones were copied into the
+  /// ledger by the migration that added it; nothing reads them since. Drop
+  /// in a later migration.
+  statements   SalesRepStatement[]
+  order_earnings SalesRepOrderEarning[]
+  ledger       SalesRepLedgerEntry[]
+  /// Clients of somebody else they found by exact email (2026-10-28).
+  client_links SalesRepClientLink[]
+
+  @@index([is_active])
+  @@index([legacy_store_id])
+  @@map("sales_reps")
+}
+
+/// Where a rep's earnings statement stands: the admin is still working on it,
+/// the rep can see it, or the rep has been paid.
+enum SalesRepStatementStatus {
+  draft
+  published
+  paid
+}
+
+/// A sales rep's earnings for dates an admin picks (2026-10-26, user request:
+/// "we should be able to see and calculate the profits and add the details
+/// like expenses, percentage decided, the profit they made… editable by the
+/// admin and the reps should only be able to see the information").
+///
+/// The system counts the rep's orders delivered in the period (lib/
+/// repEarnings); the admin enters the profit they made — there are no product
+/// costs to work it out from — and the expenses, which come off the profit
+/// first: earnings = percentage × (profit − expenses), never below zero.
+/// A rep sees published and paid statements only.
+model SalesRepStatement {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  sales_rep_id        String                  @db.Uuid
+  /// Spanish calendar dates, both included.
+  period_from         DateTime                @db.Date
+  period_to           DateTime                @db.Date
+  profit              Decimal                 @db.Decimal(12, 2)
+  percentage          Decimal                 @db.Decimal(5, 2)
+  status              SalesRepStatementStatus @default(draft)
+  paid_at             DateTime?               @db.Date
+  /// Shown to the rep.
+  notes               String?                 @db.Text
+  created_by_admin_id String?                 @db.Uuid
+  created_at          DateTime                @default(now())
+  updated_at          DateTime                @updatedAt
+
+  sales_rep SalesRep                   @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  expenses  SalesRepStatementExpense[]
+
+  @@index([sales_rep_id, period_from])
+  @@map("sales_rep_statements")
+}
+
+/// One expense on a statement — fuel, phone, a sample — itemised so the rep
+/// sees what was taken off.
+model SalesRepStatementExpense {
+  id           String   @id @default(uuid()) @db.Uuid
+  statement_id String   @db.Uuid
+  label        String
+  amount       Decimal  @db.Decimal(12, 2)
+  sort_order   Int      @default(0)
+
+  statement SalesRepStatement @relation(fields: [statement_id], references: [id], onDelete: Cascade)
+
+  @@index([statement_id])
+  @@map("sales_rep_statement_expenses")
+}
+
+/// What one order a rep built earns them (2026-10-28, user: "the earnings of
+/// the reps will be calculated from the orders. In every order we will add the
+/// expenses of that order, the net profit after calculation based on the
+/// commission percentage of that rep"). lib/repEarnings works the figures out
+/// live: products after discounts (IVA in, delivery fee out) − buying prices −
+/// these expenses = net profit; the rep earns their % of it, 0 at a loss.
+///
+/// Owed once the order is delivered AND an admin approves it. Approving stores
+/// the figures as approved and writes them to the ledger; a later change to
+/// the buying prices, the expenses or the % shows as "changed since approval"
+/// until an admin approves again, which writes the difference.
+model SalesRepOrderEarning {
+  order_id             String    @id @db.Uuid
+  sales_rep_id         String    @db.Uuid
+  /// This order's own %. Null = the rep's usual one; set from it at the first
+  /// approval, so a later change to the rep's usual % leaves it alone.
+  commission_pct       Decimal?  @db.Decimal(5, 2)
+  /// The last approval, and the figures it approved — what the rep sees, and
+  /// what the ledger holds for this order.
+  approved_at          DateTime?
+  approved_by_admin_id String?   @db.Uuid
+  approved_sales       Decimal?  @db.Decimal(12, 2)
+  approved_buying      Decimal?  @db.Decimal(12, 2)
+  approved_expenses    Decimal?  @db.Decimal(12, 2)
+  /// [{ label, amount }] as approved, so the rep's list adds up to the total.
+  approved_expense_items Json?
+  approved_pct         Decimal?  @db.Decimal(5, 2)
+  approved_earning     Decimal?  @db.Decimal(12, 2)
+  /// When an approved earning was taken back because the order was deleted
+  /// or cancelled after approval.
+  reversed_at          DateTime?
+  /// A profit an admin typed in by hand (2026-10-28), in place of the one
+  /// worked out: `gross` stands for products − buying prices (the order's
+  /// expenses still come off it); `net` is the net profit itself (buying
+  /// prices and expenses not counted). Null = worked out. Who set it, when.
+  profit_basis           RepProfitBasis?
+  profit_override        Decimal?  @db.Decimal(12, 2)
+  profit_set_by_admin_id String?   @db.Uuid
+  profit_set_at          DateTime?
+  /// The same, as approved — what the rep's approved figures were made of.
+  approved_profit_basis  RepProfitBasis?
+  approved_profit        Decimal?  @db.Decimal(12, 2)
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  order     Order                  @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  sales_rep SalesRep               @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  expenses  SalesRepOrderExpense[]
+  profit_set_by Admin?             @relation("RepProfitSetBy", fields: [profit_set_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@index([sales_rep_id])
+  @@map("sales_rep_order_earnings")
+}
+
+/// One expense on an order — delivery, fuel, a sample — itemised so the rep
+/// sees what was taken off.
+model SalesRepOrderExpense {
+  id         String  @id @default(uuid()) @db.Uuid
+  order_id   String  @db.Uuid
+  label      String
+  amount     Decimal @db.Decimal(12, 2)
+  sort_order Int     @default(0)
+
+  earning SalesRepOrderEarning @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+
+  @@index([order_id])
+  @@map("sales_rep_order_expenses")
+}
+
+/// Which profit an admin set by hand on an order (lib/repEarnings).
+enum RepProfitBasis {
+  gross
+  net
+}
+
+/// What moved a rep's balance — what is owed to them.
+enum SalesRepLedgerKind {
+  /// An order approved: its earning is owed.
+  order_earning
+  /// An order approved again after its figures changed: the difference.
+  order_adjustment
+  /// An approved order deleted or cancelled: its earning taken back.
+  order_reversal
+  /// An order cancelled or deleted before approval: nothing owed. Recorded,
+  /// with what it was expected to earn, so the history says what happened.
+  order_not_earned
+  /// A bonus (+) or a deduction (−) an admin entered by hand.
+  adjustment
+  /// Money paid to the rep.
+  payout
+  /// A payout recorded by mistake, undone.
+  payout_void
+  /// A published or paid period statement from before 2026-10-28.
+  legacy_statement
+}
+
+/// A rep's balance history (2026-10-28, user: "Within earnings we need to have
+/// the history maintained about owed amount and paid amount"). Entries are
+/// never edited or deleted — a mistake is put right by another entry. What is
+/// owed is the sum of `amount`.
+model SalesRepLedgerEntry {
+  id                  String             @id @default(uuid()) @db.Uuid
+  sales_rep_id        String             @db.Uuid
+  kind                SalesRepLedgerKind
+  /// + adds to what is owed to the rep; − takes from it (a payout, a reversal).
+  amount              Decimal            @db.Decimal(12, 2)
+  /// order_not_earned: what the order was expected to earn.
+  reference_amount    Decimal?           @db.Decimal(12, 2)
+  order_id            String?            @db.Uuid
+  /// Kept for the history should the order row ever go.
+  order_number        String?
+  /// A payout: the day it was paid. Anything else: the day it happened (Madrid).
+  occurred_on         DateTime           @db.Date
+  /// Shown to the rep.
+  note                String?            @db.Text
+  /// One entry per event that may only happen once (approving an order the
+  /// first time, taking it back, voiding a payout, copying a statement), so a
+  /// retry or two requests at once cannot write it twice.
+  dedupe_key          String?            @unique
+  /// payout_void: the payout it undoes.
+  voids_entry_id      String?            @db.Uuid
+  created_by_admin_id String?            @db.Uuid
+  created_at          DateTime           @default(now())
+
+  sales_rep SalesRep @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  order     Order?   @relation(fields: [order_id], references: [id], onDelete: SetNull)
+
+  @@index([sales_rep_id, created_at])
+  @@index([order_id])
+  @@map("sales_rep_ledger_entries")
+}
+
+/// One shop a sales rep sells from (lib/repStore). A shop deleted for good
+/// takes its rows with it; a rep revoked keeps them, for when they return.
+model SalesRepStore {
+  sales_rep_id String   @db.Uuid
+  store_id     String   @db.Uuid
+  created_at   DateTime @default(now())
+
+  sales_rep SalesRep @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  store     Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@id([sales_rep_id, store_id])
+  @@index([store_id])
+  @@map("sales_rep_stores")
+}
+
+/// One product an admin assigned a sales rep by hand (2026-10-27, the user:
+/// "assign any products to the rep and these products can be from any store
+/// and they show up in catalogue of the rep and when they are creating the
+/// orders or edit"). On top of their shops: the rep sees and sells it, every
+/// size, while it is active and its shop can be sold from. The order is still
+/// Cesto's. Gone with the rep or the product.
+model SalesRepProduct {
+  sales_rep_id String   @db.Uuid
+  product_id   String   @db.Uuid
+  created_at   DateTime @default(now())
+
+  sales_rep SalesRep @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  product   Product  @relation(fields: [product_id], references: [id], onDelete: Cascade)
+
+  @@id([sales_rep_id, product_id])
+  @@index([product_id])
+  @@map("sales_rep_products")
+}
+
+/// A client a rep found by their exact email to order for them, though the
+/// client is not theirs (2026-10-28, user: "the rep should be able to search
+/// any client or user by using their email address... this does not mean that
+/// that client will become his client"). It is what lets the rep reach the
+/// account (its profile, its prices, an order) before they have built one;
+/// once they have, the order reaches it too. Ownership never moves: that is
+/// users.created_by_sales_rep_id alone (lib/repClients). Goes with either side.
+model SalesRepClientLink {
+  sales_rep_id  String   @db.Uuid
+  user_id       String   @db.Uuid
+  /// The first time they found them, and the latest.
+  found_at      DateTime @default(now())
+  last_found_at DateTime @default(now())
+
+  sales_rep SalesRep @relation(fields: [sales_rep_id], references: [user_id], onDelete: Cascade)
+  user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([sales_rep_id, user_id])
+  @@index([user_id])
+  @@map("sales_rep_client_links")
+}
+
+model PartnerStoreRole {
+  user_id            String      @db.Uuid
+  store_id           String      @db.Uuid
+  role               PartnerRole @default(owner)
+  is_active          Boolean     @default(true)
+  /**
+   * Slice 6 rider onboarding will surface these too; unused for owner rows.
+   */
+  invited_by_user_id String?     @db.Uuid
+  created_at         DateTime    @default(now())
+  updated_at         DateTime    @updatedAt
+
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, store_id])
+  @@index([store_id, role])
+  @@index([is_active])
+  @@map("partner_store_roles")
+}
+
+// One-time cross-app SSO codes. Admin at /partner/* → mints one → embeds in
+// URL fragment → customer web (or vice-versa) redeems it for a fresh
+// access + refresh token pair. 60-second TTL, single-use (used_at set on
+// redeem; second attempt with same code fails).
+model AuthHandoffToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime
+  used_at    DateTime?
+  created_at DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([expires_at])
+  @@map("auth_handoff_tokens")
+}
+
+/// A customer's review of a product they actually bought.
+///
+/// Product.rating / Product.rating_count are the denormalised aggregate over
+/// the visible rows here. They pre-date this table and were admin-editable, so
+/// the write path in packages/api/src/routes/reviews.ts recomputes them inside
+/// the same transaction as every insert/update/delete — review-derived values
+/// win, and the admin fields become seed-only.
+model ProductReview {
+  id         String @id @default(uuid()) @db.Uuid
+  product_id String @db.Uuid
+  user_id    String @db.Uuid
+
+  /// 1-5 whole stars. Enforced by the API's zod schema and a CHECK constraint.
+  rating Int
+  title  String? @db.VarChar(120)
+  body   String  @db.VarChar(4000)
+
+  /// The order that entitles this review. Kept so support can trace a disputed
+  /// review back to a real purchase. SetNull rather than Cascade: a deleted
+  /// order must not silently erase a legitimate review.
+  order_id String? @db.Uuid
+
+  /// Moderation. Hidden reviews stay in the table (so the author still sees
+  /// their own submission and support can audit the decision) but drop out of
+  /// the public list and the rating aggregate.
+  is_hidden          Boolean   @default(false)
+  hidden_reason      String?   @db.VarChar(300)
+  hidden_at          DateTime?
+  hidden_by_admin_id String?   @db.Uuid
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  product Product               @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  user    User                  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  reports ProductReviewReport[]
+
+  /// One review per customer per product. A second submission edits the first.
+  @@unique([product_id, user_id])
+  @@index([product_id, is_hidden, created_at])
+  @@index([user_id])
+  @@index([is_hidden])
+  @@map("product_reviews")
+}
+
+/// Why a customer flagged a review. Deliberately short: a long list makes
+/// people pick the first plausible option, which tells a moderator nothing.
+enum ReviewReportReason {
+  spam
+  offensive
+  off_topic
+  personal_info
+  not_a_real_purchase
+}
+
+/// A customer flagging a review as objectionable.
+///
+/// Google Play's UGC policy requires in-app reporting for publicly visible
+/// user content, and reviews render on every product page in the app. A report
+/// hides NOTHING on its own — that stays an admin decision on
+/// ProductReview.is_hidden. This table is the queue that decision gets made
+/// from, and the record that it was made.
+model ProductReviewReport {
+  id          String @id @default(uuid()) @db.Uuid
+  review_id   String @db.Uuid
+  reporter_id String @db.Uuid
+
+  reason ReviewReportReason
+  /// Optional context. Capped short — this is a tip-off, not correspondence.
+  note   String?            @db.VarChar(500)
+
+  /// Set when an admin has looked and decided the review stays up. Kept rather
+  /// than deleted so the same review being reported repeatedly is still
+  /// visible as a pattern after each individual report is cleared.
+  dismissed_at          DateTime?
+  dismissed_by_admin_id String?   @db.Uuid
+
+  created_at DateTime @default(now())
+
+  review   ProductReview @relation(fields: [review_id], references: [id], onDelete: Cascade)
+  reporter User          @relation(fields: [reporter_id], references: [id], onDelete: Cascade)
+
+  /// One report per person per review. A second tap is not a second signal,
+  /// and without this a single user could manufacture a moderation queue.
+  @@unique([review_id, reporter_id])
+  @@index([dismissed_at, created_at])
+  @@index([review_id])
+  @@map("product_review_reports")
+}
+
+// ─── INVOICING ──────────────────────────────────────────
+
+enum InvoiceStatus {
+  draft
+  issued
+}
+
+/**
+ * What the document claims to be.
+ * `proforma` is not a fiscal document and says so on its face. It exists
+ * because the two things a Spanish factura cannot be issued without — the
+ * seller's CIF/NIF and a VAT rate somebody actually confirmed per product —
+ * are not in place yet. A document titled FACTURA with guessed IVA and no
+ * tax ID is worse than one that does not claim to be one.
+ * `invoice` is the real thing and is unlocked by lib/invoicing.ts once those
+ * blockers clear. `credit_note` is the only legal way to correct an issued
+ * invoice; nothing emits one yet.
+ */
+enum InvoiceKind {
+  /**
+   * Delivery note. Confirms what was handed over — goods, quantities, date,
+   * customer — and asks for nothing. Not a fiscal document, so it never locks
+   * the order and can be reissued when a delivery changes.
+   *
+   * Renamed from `proforma` on 2026-10-02. The mechanics were already right
+   * for an albarán (non-fiscal, reissuable, its own number series); what was
+   * wrong was the meaning. A proforma is a price offer made BEFORE supply,
+   * and Cesto does not quote — it delivers, then invoices.
+   */
+  albaran
+  invoice
+  credit_note
+}
+
+/**
+ * Per-series, per-year counter.
+ * Deliberately a row rather than a Postgres sequence. `nextval()` is
+ * non-transactional by design: a rolled-back transaction, a failed
+ * constraint or a crashed backend each burn a number permanently, and
+ * "gap-free" is a legal requirement for a factura series. A row incremented
+ * by `UPDATE ... RETURNING` inside the issuing transaction rolls back with
+ * it, so a number cannot exist without the invoice that claimed it.
+ */
+model InvoiceSeries {
+  id          String   @id @default(uuid()) @db.Uuid
+  series      String   @db.VarChar(8)
+  year        Int
+  last_number Int      @default(0)
+  updated_at  DateTime @updatedAt
+
+  @@unique([series, year])
+  @@map("invoice_series")
+}
+
+model Invoice {
+  id     String        @id @default(uuid()) @db.Uuid
+  kind   InvoiceKind   @default(albaran)
+  status InvoiceStatus @default(draft)
+
+  /**
+   * Allocated at ISSUE, never at draft. Numbering a draft means every
+   * abandoned one leaves a hole in a series that is required not to have any.
+   */
+  series         String?   @db.VarChar(8)
+  year           Int?
+  number         Int?
+  invoice_number String?   @unique
+  /**
+   * Server-stamped on issue. Never client-supplied — that is how invoices
+   * get backdated into a closed quarter.
+   */
+  issue_date     DateTime?
+
+  /**
+   * What this document is ABOUT — exactly one of the two, enforced by the
+   * `invoices_one_subject` CHECK.
+   *
+   * A split purchase is one ParentOrder with a sub-Order per shop, and the
+   * customer made ONE purchase: they get one albarán and one factura covering
+   * all of it, hung off parent_order_id. A standalone order uses order_id as
+   * before.
+   */
+  order_id        String? @db.Uuid
+  parent_order_id String? @db.Uuid
+  user_id         String  @db.Uuid
+
+  /**
+   * Both parties frozen as they were at issue. Editing the settings or the
+   * client later must never rewrite a document somebody already holds a copy of.
+   */
+  seller_snapshot Json
+  buyer_snapshot  Json
+  /**
+   * Line items as issued, with their own VAT rate and provenance.
+   */
+  lines           Json
+  /**
+   * Lines the office left off this document on purpose (2026-11-04): each an
+   * invoice line plus `at`, where it sat. NEVER printed and never in the
+   * totals — `lines` above is exactly what the paper says — and hiding one
+   * changes nothing on the order. Frozen with the rest once issued
+   * (invoices_no_mutate_issued), as the record of what was left off.
+   */
+  hidden_lines    Json @default("[]")
+  /**
+   * { by_rate: [{rate_pct, base, vat, gross}], base, vat, gross }
+   */
+  totals          Json
+
+  taxable_base Decimal @db.Decimal(10, 2)
+  vat_total    Decimal @db.Decimal(10, 2)
+  /** Recargo de equivalencia on the document (2026-11-04); 0 when none. */
+  recargo_total Decimal @default(0) @db.Decimal(10, 2)
+  /** The document charges recargo — copied from its order or purchase. */
+  recargo_equivalencia Boolean @default(false)
+  /** taxable_base + vat_total + recargo_total. */
+  total        Decimal @db.Decimal(10, 2)
+  currency     String  @default("EUR")
+
+  payment_terms String?
+  notes         String? @db.Text
+
+  /**
+   * True once an admin has edited this draft's own figures.
+   *
+   * A draft normally TRACKS its order: every read rebuilds the lines from the
+   * order, so adding an item or changing the fee is reflected without anyone
+   * reopening the document. That is right until somebody deliberately edits
+   * the document itself — after which re-syncing would silently throw their
+   * work away on the next page load.
+   *
+   * So the first money edit detaches the draft, and the screen flags any line
+   * that no longer matches the order instead. Issued invoices never re-sync
+   * either way; this is only about drafts.
+   */
+  manually_edited Boolean @default(false)
+
+  created_by_admin_id String?  @db.Uuid
+  issued_by_admin_id  String?  @db.Uuid
+  /// A rep drafts and issues from their own screen, so the same pair exists
+  /// for them. No relation, like the admin pair above: a SET NULL would erase
+  /// who issued a factura the day their account went, and a factura is a
+  /// record of who did what for years afterwards.
+  created_by_sales_rep_id String? @db.Uuid
+  issued_by_sales_rep_id  String? @db.Uuid
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  order        Order?       @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  /**
+   * RESTRICT, not Cascade: a purchase that carries an issued document must not
+   * be deletable out from under it. The per-order relation can cascade because
+   * deleting an order is already refused while a factura names it.
+   */
+  parent_order ParentOrder? @relation(fields: [parent_order_id], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  pdf          InvoicePdf?
+
+  @@index([order_id])
+  @@index([parent_order_id])
+  @@index([user_id])
+  @@index([status])
+  @@index([issue_date])
+  @@index([issued_by_sales_rep_id])
+  @@map("invoices")
+}
+
+/// The exact PDF of an issued factura or albarán (lib/invoicePdf). Never replaced.
+model InvoicePdf {
+  invoice_id            String   @id @db.Uuid
+  /// Where it is in storage. Stays on the server: every read goes through the API.
+  storage_key           String
+  sha256                String   @db.VarChar(64)
+  size_bytes            Int
+  saved_by_admin_id     String?  @db.Uuid
+  saved_by_sales_rep_id String?  @db.Uuid
+  created_at            DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+
+  @@map("invoice_pdfs")
+}
+
+/**
+ * One checkout attempt, remembered by the key the client sent with it.
+ *
+ * A guard on the button stops a second PRESS. It does nothing about a second
+ * REQUEST — a retry after a timeout, a reloaded tab, a flaky connection that
+ * resends — and POST /api/orders had no defence against any of those. The
+ * route's own comment said so: "There is no idempotency key on POST
+ * /api/orders, so the retry that follows places a second real order." Orders
+ * duplicated in production often enough to be reported.
+ *
+ * KEYED BY (user, key), not by key alone. The key is generated by the client,
+ * so two customers can produce the same one; scoping it to the account means
+ * a collision cannot hand somebody else's order back, and cannot fail a
+ * stranger's checkout either.
+ *
+ * NO replay window, deliberately — unlike ProductImportJob, which treats a
+ * resubmit after an hour as fresh intent. A key here identifies ONE attempt
+ * at ONE basket. Replaying it should return that order in a minute or in a
+ * month; what it must never do is quietly place a second one.
+ *
+ * The row is written INSIDE the checkout transaction, so the primary key is
+ * what actually arbitrates a race: two simultaneous requests carrying the
+ * same key cannot both commit, and the loser re-reads the winner's order.
+ */
+model OrderIdempotency {
+  user_id         String   @db.Uuid
+  key             String
+  /** Set for an ordinary checkout. */
+  order_id        String?  @db.Uuid
+  /** Set instead when the basket split across shops. */
+  parent_order_id String?  @db.Uuid
+  created_at      DateTime @default(now())
+
+  @@id([user_id, key])
+  @@index([order_id])
+  @@index([parent_order_id])
+  @@map("order_idempotency")
+}

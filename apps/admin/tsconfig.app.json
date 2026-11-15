@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@grocery-app/shared": ["../../packages/shared/src"],
+      "@grocery-app/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": ["src", "../../packages/shared/src"],
+  // shared/src is compiled wholesale by the include above, so a test file
+  // living there lands in this build too — and these projects carry only
+  // vite/client types, so anything touching `process` fails the Vercel
+  // build. Test files are never part of an app bundle; keep them out.
+  "exclude": ["../../packages/shared/src/**/*.test.ts"]
+}

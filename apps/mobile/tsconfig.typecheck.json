@@ -1,0 +1,43 @@
+{
+  // Typecheck-only config. Run it with:
+  //   npx tsc -p tsconfig.typecheck.json --noEmit
+  //
+  // Why this is separate from tsconfig.json: packages/shared carries its own
+  // @types/react@19 (it is built for the Vite apps, which run React 19) while
+  // this app is on React 18.3. Mobile compiles shared's .tsx sources directly,
+  // so both copies land in one program and every shared component fails with
+  // "cannot be used as a JSX component" — React 19's ReactNode admits bigint
+  // and a Promise, React 18's does not.
+  //
+  // Pinning `react` to the root copy fixes that, but the mapping CANNOT live
+  // in tsconfig.json: Expo enables Metro's tsconfigPaths experiment, so Metro
+  // reads the same `paths` and resolves the runtime `import React from 'react'`
+  // to the *types* package, which has no index.js. That fails the bundle with
+  // "the package @types/react specifies a main module that could not be
+  // resolved". Keeping it here means TypeScript sees it and Metro does not.
+  //
+  // `paths` replaces rather than merges across `extends`, so @/* is repeated.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      // Repeated from tsconfig.json for the same reason @/* is: `paths`
+      // REPLACES across `extends`. Without it, `lucide-react-native` (hoisted
+      // to the root node_modules) cannot resolve `react-native-svg` (installed
+      // only under apps/mobile), so `LucideProps extends SvgProps` collapses
+      // and every `color`/`strokeWidth`/`fill` on an icon fails — 583 errors,
+      // none of them real.
+      "react-native-svg": [
+        "./node_modules/react-native-svg"
+      ],
+      "react": [
+        "../../node_modules/@types/react"
+      ],
+      "react/*": [
+        "../../node_modules/@types/react/*"
+      ]
+    }
+  }
+}

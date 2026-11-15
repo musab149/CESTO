@@ -1,0 +1,246 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800;9..40,900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@import "tailwindcss";
+
+/* ─── DESIGN SYSTEM TOKENS ────────────────────────────── */
+@theme {
+  /* Brand Blues — Cesto royal blue scale anchored on #054EE8 */
+  --color-brand-deepest: #022B91;
+  --color-brand: #054EE8;
+  --color-brand-mid: #2A6AEF;
+  --color-brand-light: #7AA1F6;
+  --color-brand-soft: #B6CBFA;
+  --color-brand-mist: #DCE6FD;
+  --color-brand-whisper: #F0F4FE;
+
+  /* Fresh-green accent — Cesto leaf
+     (Variable name kept as "amber-*" so existing usages don't need a refactor.) */
+  --color-amber-deep: #5FA133;
+  --color-amber: #7FC646;
+  --color-amber-mid: #98D265;
+  --color-amber-mist: #E9F4DC;
+
+  /* Surfaces */
+  --color-surface-linen: #F5F0E8;
+  --color-surface-cream: #FAFAF7;
+  --color-surface-white: #FFFFFF;
+
+  /* Text */
+  --color-ink: #1A1A1A;
+  --color-charcoal: #2D2D2D;
+  --color-gray: #5C5C5C;
+  --color-muted: #9E9E9E;
+  --color-border: #E2E8F0;
+
+  /* Status */
+  --color-danger: #B71C1C;
+  --color-danger-bg: #FFEBEE;
+  --color-info: #1565C0;
+  --color-info-bg: #E3F2FD;
+  /* Warning stays amber-yellow — independent from accent now that accent is green. */
+  --color-warning: #D97706;
+  --color-warning-bg: #FEF3C7;
+  --color-success: #2E7D32;
+  --color-success-bg: #E8F5E9;
+
+  /* Named for the dark mode (2026-10-28), each exactly what it replaced in
+     the light: a card's surface (white), the page under the cards (white),
+     the dark wash behind a dialog, blue words, the blue focus-mode bar, a
+     band that stays dark in both themes (the sidebar), and words on the
+     green accent fill. */
+  --color-card: #FFFFFF;
+  --color-canvas: #FFFFFF;
+  --color-veil: #0D1B2E;
+  --color-brand-ink: #022B91;
+  --color-brand-bar: #054EE8;
+  --color-night: #1A1A1A;
+  --color-on-accent: #1A1A1A;
+  /* "Preparing": a violet pill (components/StatusBadge). */
+  --color-st-violet-bg: #F3E5F5;
+  --color-st-violet-fg: #7B1FA2;
+
+  /* Fonts */
+  --font-display: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Shadows */
+  --shadow-card: 0 1px 4px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
+  --shadow-card-hover: 0 8px 25px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.05);
+  --shadow-float: 0 10px 30px rgba(0,0,0,0.12);
+  --shadow-modal: 0 20px 60px rgba(0,0,0,0.15);
+  --shadow-nav: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+/* ─── BASE STYLES ─────────────────────────────────────── */
+body {
+  font-family: var(--font-display);
+  color: var(--color-ink);
+  background-color: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── THE ADMIN PANEL IN THE DARK (2026-10-28) ────────────
+   The user's ask: "go for dark mode implementation of cestoshop website...
+   And admin panel... do it the way you did it for rep dashboard". The same
+   way: the admin's choice — light, dark or the device's — sets
+   `data-admin-theme` on <html> (lib/adminTheme.ts, and index.html before the
+   first paint) and the tokens repaint. Cesto's one dark: the rep panel's and
+   the shop's navy — a deep canvas, cards a step up, fills a step above; a
+   cool off-white ink; the brand blue lifted to read on navy. The sidebar,
+   dark already, goes darker still (`night`). */
+html[data-admin-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas:        #0B1220;   /* the page */
+  --color-card:          #121B2C;   /* cards, the header */
+  --color-surface-white: #121B2C;
+  --color-surface-cream: #151F32;   /* inputs' rest, table heads */
+  --color-surface-linen: #19243A;   /* row hover, soft fills */
+  --color-border:        #3A4A66;   /* a light line on navy (user, 2026-10-28: "always use the very light border everywhere") */
+  --color-veil:          #02060E;
+  --color-night:         #070C17;
+
+  --color-ink:      #E8EDF6;
+  --color-charcoal: #CED7E6;
+  --color-gray:     #9DA9BF;
+  --color-muted:    #7A889F;
+
+  --color-brand:         #3474F6;
+  --color-brand-mid:     #4C86FF;
+  --color-brand-deepest: #2459D6;   /* a fill: blue buttons' hover */
+  --color-brand-light:   #6F9BFF;
+  --color-brand-soft:    #2B4785;
+  --color-brand-mist:    #152548;
+  --color-brand-whisper: #121F3B;
+  --color-brand-ink:     #9DBBFF;   /* words in blue */
+  --color-brand-bar:     #0F1D3D;
+
+  --color-amber-deep: #8FD45A;
+  --color-amber:      #7FC646;
+  --color-amber-mid:  #98D265;
+  --color-amber-mist: #17291A;
+
+  --color-danger:     #F06478;
+  --color-danger-bg:  #331820;
+  --color-info:       #6F9BFF;
+  --color-info-bg:    #142546;
+  --color-warning:    #E9A23B;
+  --color-warning-bg: #2E2312;
+  --color-success:    #3DD68C;
+  --color-success-bg: #10291F;
+  --color-st-violet-bg: #262046;
+  --color-st-violet-fg: #ADA3FF;
+
+  /* The few of Tailwind's own greys the panel still names (toggle tracks,
+     an inactive pill, a notice), and amber-700. */
+  --color-gray-50:   #151F32;
+  --color-gray-100:  #19243A;
+  --color-gray-200:  #1F2B42;
+  --color-gray-300:  #2A3854;
+  --color-gray-600:  #9DA9BF;
+  --color-gray-700:  #B5C0D2;
+  --color-amber-700: #F1BE5C;
+
+  --shadow-card:       0 1px 2px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-card-hover: 0 8px 24px -6px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.30);
+  --shadow-float:      0 10px 30px rgba(0, 0, 0, 0.55);
+  --shadow-modal:      0 20px 60px rgba(0, 0, 0, 0.60);
+  --shadow-nav:        0 1px 0 rgba(58, 74, 102, 0.9);
+}
+html[data-admin-theme="dark"] .skeleton {
+  background: linear-gradient(90deg, #172235 25%, #1F2C44 50%, #172235 75%);
+  background-size: 200% 100%;
+}
+html[data-admin-theme="dark"] ::-webkit-scrollbar-thumb { background: #2A3854; }
+html[data-admin-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #3A4A6A; }
+
+/* ─── SHIMMER SKELETON ────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #f0ece4 25%, #faf8f4 50%, #f0ece4 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+/* ─── SIDE-PANEL TRANSITIONS ──────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* A figure that has just changed, rolled like a counter: the old value
+   leaves upwards while the new one arrives from below, both inside a box
+   that clips them. Short on purpose — this fires on every page the
+   catalogue loads, and anything slower turns a steady read into something
+   that keeps asking to be looked at. */
+@keyframes rollOut {
+  from { transform: translateY(0);     opacity: 1; }
+  to   { transform: translateY(-100%); opacity: 0; }
+}
+@keyframes rollIn {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.animate-roll-out { animation: rollOut 220ms cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+.animate-roll-in  { animation: rollIn  220ms cubic-bezier(0.4, 0, 0.2, 1); }
+
+/* No roll, just the new figure. Motion that reports a change is still a
+   change somebody asked not to be shown. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-roll-out { animation: none; opacity: 0; }
+  .animate-roll-in  { animation: none; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+/* ─── SCROLLBAR ───────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* ─── TAB STRIPS ON A PHONE (2026-11-05) ───────────────────
+   A row of tabs that would wrap onto two or three lines scrolls sideways
+   instead: one line, no scrollbar, the right edge fading so the next tab
+   reads as "more this way". From sm up the row wraps as before. */
+.tab-strip {
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+@media (max-width: 639px) {
+  .tab-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .tab-strip > * { flex-shrink: 0; white-space: nowrap; }
+}
+
+/* ─── SIDEBAR SCROLLBAR ──────────────────────────────── */
+.sidebar-scroll::-webkit-scrollbar { width: 4px; }
+.sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+/* EVERY FIELD, not only QuantityField (2026-11-05): iOS zooms the page in when
+   a field under 16px is focused, and leaves it zoomed — the phone audit found
+   it on 41 of 43 pages (text-sm / text-xs on nearly every input). On a touch
+   screen, or any width the sidebar folds away at, fields are 16px; a desktop
+   keeps the denser sizes.
+   Unlayered on purpose: Tailwind's text-* utilities live in @layer utilities,
+   and unlayered rules beat layered ones whatever their specificity. */
+@media (pointer: coarse), (max-width: 1023px) {
+  .qty-field,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea { font-size: 16px; }
+}

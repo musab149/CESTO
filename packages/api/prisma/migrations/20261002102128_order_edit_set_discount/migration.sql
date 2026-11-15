@@ -1,0 +1,11 @@
+-- AlterEnum
+--
+-- IF NOT EXISTS is deliberate. On 2026-08-31 a duplicate enum label took
+-- production down: master had received one migration adding a label and not
+-- the earlier one, so promoting the earlier file failed on a label that was
+-- already there, and P3009 then blocked every migration behind it.
+--
+-- Adding a value is safe on its own; being unable to re-run it is what hurt.
+-- This form is idempotent, so the same file can land on a branch that already
+-- has the label without wedging the chain.
+ALTER TYPE "OrderEditAction" ADD VALUE IF NOT EXISTS 'set_discount';

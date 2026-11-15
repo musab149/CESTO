@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "937885735870",
+    "project_id": "cesto-67339",
+    "storage_bucket": "cesto-67339.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:937885735870:android:f762e5fcd1ef8746dcb7ef",
+        "android_client_info": {
+          "package_name": "es.cesto.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "937885735870-5cjg1jhn1qn6u2qeujvv6b6c6i3tlhae.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyAcaU2FvG_52jHKNmAlva5KQbZRtrq6Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "937885735870-5cjg1jhn1qn6u2qeujvv6b6c6i3tlhae.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

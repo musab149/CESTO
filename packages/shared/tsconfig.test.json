@@ -1,0 +1,12 @@
+{
+  "// ": "Test-runner config. Tests live in tests/ rather than src/ on purpose: apps/web, apps/admin and apps/mobile all glob ../../packages/shared/src straight into their own tsconfig include, so a *.test.ts under src/ would drag Node built-ins (assert, process) into three browser builds that have no @types/node. Also pinned to CommonJS because ts-node needs it while the package ships as ESNext/bundler for Vite and Metro.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Cesto C-mark on royal-blue rounded square -->
+  <rect width="64" height="64" rx="14" fill="#054EE8"/>
+  <!-- White C with a yellow accent arc at bottom-left, matching the brand logo -->
+  <path
+    d="M48 22.5a18 18 0 0 0-32 11.5 18 18 0 0 0 32 11.5"
+    fill="none" stroke="#FFFFFF" stroke-width="6.5" stroke-linecap="round"
+  />
+  <path
+    d="M22.5 41a12.5 12.5 0 0 0 11.5 6.5"
+    fill="none" stroke="#7FC646" stroke-width="6.5" stroke-linecap="round"
+  />
+</svg>

@@ -1,0 +1,31 @@
+node_modules/
+dist/
+.env
+# Every env variant (.env.staging, .env.production, …). These hold real
+# credentials — a staging DATABASE_URL and a Bunny storage key that grants
+# delete over the whole zone. Only the example file is tracked.
+.env.*
+*.env.local
+!.env.example
+.DS_Store
+
+# Uploaded files (local dev)
+packages/api/uploads/
+packages/api/private-documents/
+
+# Vercel CLI link
+.vercel
+
+branch_structure.json
+
+# Local Claude Code agent worktrees (ephemeral, environment-specific)
+.claude/worktrees/
+
+# Cloudinary → Bunny migration ledger. Generated, and specific to whichever
+# database the migration was pointed at (staging and production produce
+# different maps), so it must not be shared between them. It IS the rollback
+# record for that run — keep the local copy until the migration is signed off.
+packages/api/prisma/cloudinary-to-bunny*.map.json
+
+# Local ledger written by scripts/seed-staging-orders.mjs (--undo reads it)
+packages/api/scripts/.seeded-staging-orders.json

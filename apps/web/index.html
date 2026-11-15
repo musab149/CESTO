@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title>Cesto — Comida fresca directo a tu puerta</title>
+    <script>
+      /* The rep panel and the shop in the dark before their first paint, so a
+         reload never flashes them white (src/sales/lib/theme.ts and
+         src/lib/shopTheme.ts keep it after). Each has its own choice; the
+         partner panel has none. */
+      (function () {
+        try {
+          var path = location.pathname;
+          var under = function (p) { return path === p || path.indexOf(p + '/') === 0; };
+          if (under('/partner')) return;
+          var rep = under('/sales');
+          // The business panel is drawn in the rep panel's palette, so it uses
+          // the same attribute — from the buyer's own choice, light until they
+          // make one (stores/businessThemeStore).
+          var biz = under('/business');
+          var saved = JSON.parse(localStorage.getItem(rep ? 'cesto-sales-theme' : biz ? 'cesto-business-theme' : 'cesto-theme') || 'null');
+          var choice = (saved && saved.state && saved.state.choice) || (biz ? 'light' : 'system');
+          if (choice === 'dark' || (choice === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.setAttribute(rep || biz ? 'data-sales-theme' : 'data-shop-theme', 'dark');
+          }
+        } catch (e) { /* light, then */ }
+      })();
+    </script>
+  </head>
+  <body style="background-color: #F5F0E8">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

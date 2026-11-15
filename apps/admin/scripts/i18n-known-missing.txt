@@ -1,0 +1,103 @@
+# Admin locale keys known to be missing from en.json and es.json.
+#
+# All of it is the multi-vendor store admin. i18next falls back to the inline
+# English default, so these render in English for a Spanish admin — visible to
+# them, invisible to everyone else, which is why they went unnoticed.
+#
+# Translating them is a block of domain copy for somebody who has seen those
+# screens. Delete a line when its key is done: the checker fails if a listed
+# key turns out to exist, so this list cannot rot in either direction.
+#
+# Recorded 2026-10-10, found while renaming six keys for the shared
+# credentials dialog.
+storeProducts.addFirstProducts
+storeProducts.addProducts
+storeProducts.col.actions
+storeProducts.col.b2bPrice
+storeProducts.col.b2cPrice
+storeProducts.col.category
+storeProducts.col.product
+storeProducts.col.status
+storeProducts.col.stock
+storeProducts.confirmUnassign
+storeProducts.count
+storeProducts.editHint
+storeProducts.editProduct
+storeProducts.emptyBody
+storeProducts.emptyTitle
+storeProducts.lowStock
+storeProducts.noB2b
+storeProducts.noSearchMatch
+storeProducts.outOfStock
+storeProducts.removing
+storeProducts.search
+storeProducts.unassign
+storeProducts.unassignBody
+storeProducts.unassignTitle
+storeProducts.unassignedToast
+stores.col.actions
+stores.col.followers
+stores.col.name
+stores.col.products
+stores.col.rating
+stores.col.slug
+stores.col.status
+stores.create
+stores.created
+stores.editTitle
+stores.editingLabel
+stores.emptyBody
+stores.emptyTitle
+stores.field.address
+stores.field.addressHint
+stores.field.closed
+stores.field.country
+stores.field.countryHint
+stores.field.cover
+stores.field.coverHint
+stores.field.descriptionEn
+stores.field.descriptionEs
+stores.field.email
+stores.field.fastDelivery
+stores.field.isActive
+stores.field.isTest
+stores.field.isVerified
+stores.field.logo
+stores.field.logoBg
+stores.field.logoBgHint
+stores.field.logoHint
+stores.field.name
+stores.field.origin
+stores.field.originHint
+stores.field.phone
+stores.field.rating
+stores.field.ratingCount
+stores.field.slug
+stores.field.slugHint
+stores.field.sortOrder
+stores.field.status
+stores.field.taglineEn
+stores.field.taglineEs
+stores.field.website
+stores.filter.active
+stores.filter.all
+stores.filter.inactive
+stores.manageProductsSearch
+stores.manageProductsSelected
+stores.manageProductsTitle
+stores.new
+stores.newSubtitle
+stores.newTitle
+stores.noProductsFound
+stores.preview
+stores.previewTitle
+stores.productsSaved
+stores.saved
+stores.search
+stores.section.hoursHint
+stores.subtitle
+stores.tab.branding
+stores.tab.contact
+stores.tab.hours
+stores.tab.identity
+stores.tab.products
