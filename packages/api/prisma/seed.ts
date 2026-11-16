@@ -1,11 +1,32 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
 import { seedHelpCenter } from './seedHelpCenter';
 
 const prisma = new PrismaClient();
 
+// Demo images for the seeded categories, products and banners. The originals
+// live in prisma/demo-images/ (tracked); uploads/ is gitignored, so each seed
+// copies them to uploads/demo/, which the API serves at /uploads/demo/*. They
+// replaced loremflickr.com links, which stopped serving images.
+const DEMO_IMAGE_SRC = path.join(__dirname, 'demo-images');
+const DEMO_IMAGE_DEST = path.join(__dirname, '..', 'uploads', 'demo');
+const demoImage = (file: string) => `/uploads/demo/${file}`;
+
+function installDemoImages() {
+  fs.mkdirSync(DEMO_IMAGE_DEST, { recursive: true });
+  const files = fs.readdirSync(DEMO_IMAGE_SRC).filter((f) => f.endsWith('.webp'));
+  for (const file of files) {
+    fs.copyFileSync(path.join(DEMO_IMAGE_SRC, file), path.join(DEMO_IMAGE_DEST, file));
+  }
+  console.log(`   - ${files.length} demo images copied to uploads/demo/`);
+}
+
 async function main() {
   console.log('🌱 Seeding database...');
+
+  installDemoImages();
 
   // Guard catalog blocks so this script is idempotent. We only seed the
   // catalog/riders if NO data exists yet — otherwise leave
@@ -23,7 +44,7 @@ async function main() {
     data: {
       name_es: 'Arroz y Legumbres',
       name_en: 'Rice & Pulses',
-      icon_url: 'https://loremflickr.com/400/400/rice,grain?lock=1',
+      icon_url: demoImage('cat-rice.webp'),
       sort_order: 1,
     },
   });
@@ -32,7 +53,7 @@ async function main() {
     data: {
       name_es: 'Especias y Condimentos',
       name_en: 'Spices & Seasonings',
-      icon_url: 'https://loremflickr.com/400/400/spices,curry?lock=2',
+      icon_url: demoImage('cat-spices.webp'),
       sort_order: 2,
     },
   });
@@ -41,7 +62,7 @@ async function main() {
     data: {
       name_es: 'Snacks y Dulces',
       name_en: 'Snacks & Sweets',
-      icon_url: 'https://loremflickr.com/400/400/snacks,namkeen?lock=3',
+      icon_url: demoImage('cat-snacks.webp'),
       sort_order: 3,
     },
   });
@@ -91,7 +112,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: 'https://loremflickr.com/600/600/basmati,rice?lock=11', is_primary: true, sort_order: 0 },
+          { url: demoImage('prod-basmati.webp'), is_primary: true, sort_order: 0 },
         ],
       },
     },
@@ -117,7 +138,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: 'https://loremflickr.com/600/600/lentils,daal?lock=12', is_primary: true, sort_order: 0 },
+          { url: demoImage('prod-chana-dal.webp'), is_primary: true, sort_order: 0 },
         ],
       },
     },
@@ -143,7 +164,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: 'https://loremflickr.com/600/600/cumin,spice?lock=13', is_primary: true, sort_order: 0 },
+          { url: demoImage('prod-cumin.webp'), is_primary: true, sort_order: 0 },
         ],
       },
     },
@@ -169,7 +190,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: 'https://loremflickr.com/600/600/garam,masala?lock=14', is_primary: true, sort_order: 0 },
+          { url: demoImage('prod-garam-masala.webp'), is_primary: true, sort_order: 0 },
         ],
       },
     },
@@ -195,7 +216,7 @@ async function main() {
       },
       images: {
         create: [
-          { url: 'https://loremflickr.com/600/600/indian,snack?lock=15', is_primary: true, sort_order: 0 },
+          { url: demoImage('prod-aloo-bhujia.webp'), is_primary: true, sort_order: 0 },
         ],
       },
     },
@@ -334,8 +355,8 @@ async function main() {
           subtitle_en: 'Subscribe and get the essentials delivered each month',
           cta_es: 'Descubrir Rashan',
           cta_en: 'Explore Rashan',
-          image_desktop: 'https://loremflickr.com/1600/600/grocery,delivery?lock=21',
-          image_mobile: 'https://loremflickr.com/800/600/grocery,delivery?lock=22',
+          image_desktop: demoImage('banner-rashan-desktop.webp'),
+          image_mobile: demoImage('banner-rashan-mobile.webp'),
           link_type: 'url',
           link_target: '/rashan',
           display_order: 1,
@@ -348,8 +369,8 @@ async function main() {
           subtitle_en: 'Madrid Centro · same day if you order before 14:00',
           cta_es: 'Empezar a comprar',
           cta_en: 'Start shopping',
-          image_desktop: 'https://loremflickr.com/1600/600/delivery,van?lock=23',
-          image_mobile: 'https://loremflickr.com/800/600/delivery,van?lock=24',
+          image_desktop: demoImage('banner-freeship-desktop.webp'),
+          image_mobile: demoImage('banner-freeship-mobile.webp'),
           link_type: null,
           link_target: null,
           display_order: 2,
